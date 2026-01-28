@@ -178,6 +178,7 @@ def fetch_historical_data(symbol, start_time, end_time):
         # 每次请求最多获取1000条数据
         limit = 1000
         interval = '5m'  # 5分钟K线
+        request_count = 0
         
         while current_start < end_ts:
             # 计算本次请求的结束时间
@@ -192,6 +193,9 @@ def fetch_historical_data(symbol, start_time, end_time):
                 'endTime': current_end,
                 'limit': limit
             }
+            
+            # 添加随机延迟避免API限制
+            time.sleep(0.2 + (hash(current_start) % 10) / 20)
             
             response = requests.get(url, params=params)
             response.raise_for_status()
@@ -216,8 +220,11 @@ def fetch_historical_data(symbol, start_time, end_time):
             # 更新下一次请求的开始时间
             current_start = klines[-1][0] + 1
             
-            # 短暂暂停，避免API限制
-            time.sleep(0.1)
+            # 每10次请求增加更长的延迟
+            request_count += 1
+            if request_count % 10 == 0:
+                print(f'已请求 {request_count} 次，短暂休息...')
+                time.sleep(1)
         
         print(f'成功获取 {symbol} 的 {len(all_data)} 条历史数据')
         return all_data
@@ -245,6 +252,10 @@ def fetch_prices():
     save_to_database(data)
 
 
+# 贪婪恐惧指数缓存
+fear_greed_cache = {}
+
+
 def fetch_fear_greed_index(timestamp=None):
     """
     获取比特币贪婪恐惧指数
@@ -259,18 +270,30 @@ def fetch_fear_greed_index(timestamp=None):
         if timestamp:
             # 解析时间戳获取日期
             date = datetime.fromisoformat(timestamp).strftime('%Y-%m-%d')
+            
+            # 检查缓存
+            if date in fear_greed_cache:
+                return fear_greed_cache[date]
+            
             # 使用Alternative.me的API获取指定日期的贪婪恐惧指数
             url = f'https://api.alternative.me/fng/?date={date}'
         else:
             # 获取当前贪婪恐惧指数
             url = 'https://api.alternative.me/fng/?limit=1'
         
+        # 添加随机延迟避免API限制
+        time.sleep(0.5 + (hash(timestamp) % 10) / 10)
+        
         response = requests.get(url)
         response.raise_for_status()
         data = response.json()
         
         if data['data'] and len(data['data']) > 0:
-            return int(data['data'][0]['value'])
+            index_value = int(data['data'][0]['value'])
+            # 缓存结果
+            if timestamp:
+                fear_greed_cache[date] = index_value
+            return index_value
         return None
     except Exception as error:
         # 处理异常情况
@@ -406,49 +429,87 @@ def setup_scheduler():
         time.sleep(1)  # 暂停1秒，避免CPU占用过高
 
 
-def fetch_historical_data_for_3_years():
+def get_latest_timestamp(symbol):
     """
-    爬取过去3年的每5分钟历史数据
+    获取数据库中指定币种的最新数据时间戳
+    
+    参数:
+        symbol (str): 加密货币的符号
+    
+    返回:
+        datetime: 最新数据的时间戳，如果没有数据则返回None
     """
-    print('开始爬取过去3年的历史数据...')
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        
+        cursor = conn.cursor()
+        
+        # 查询最新的时间戳
+        query = """
+        SELECT MAX(timestamp) as latest_time
+        FROM price_data
+        WHERE symbol = %s
+        """
+        cursor.execute(query, (symbol,))
+        result = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+        
+        if result and result[0]:
+            return result[0]
+        return None
+    except Exception as error:
+        print(f'获取{symbol}最新时间戳失败:', str(error))
+        return None
+
+
+def fetch_historical_data_from_latest():
+    """
+    从数据库中最新数据的时间开始爬取历史数据
+    """
+    print('开始爬取历史数据...')
     
     # 计算时间范围
     end_time = datetime.now()
-    start_time_2023 = datetime(2023, 1, 1, 0, 0, 0)
-    start_time_2024 = datetime(2024, 1, 1, 0, 0, 0)
-    start_time_2025 = datetime(2025, 1, 1, 0, 0, 0)
-    start_time_2026 = datetime(2026, 1, 1, 0, 0, 0)
     
     # 定义要爬取的币种
     symbols = ['BTC', 'ETH']
     
-    # 爬取2023年数据
-    print('\n===== 爬取2023年数据 =====')
     for symbol in symbols:
-        data_2023 = fetch_historical_data(symbol, start_time_2023, start_time_2024)
-        if data_2023:
-            save_to_database(data_2023)
-    
-    # 爬取2024年数据
-    print('\n===== 爬取2024年数据 =====')
-    for symbol in symbols:
-        data_2024 = fetch_historical_data(symbol, start_time_2024, start_time_2025)
-        if data_2024:
-            save_to_database(data_2024)
-    
-    # 爬取2025年数据
-    print('\n===== 爬取2025年数据 =====')
-    for symbol in symbols:
-        data_2025 = fetch_historical_data(symbol, start_time_2025, start_time_2026)
-        if data_2025:
-            save_to_database(data_2025)
-    
-    # 爬取2026年至今数据
-    print('\n===== 爬取2026年至今数据 =====')
-    for symbol in symbols:
-        data_2026 = fetch_historical_data(symbol, start_time_2026, end_time)
-        if data_2026:
-            save_to_database(data_2026)
+        print(f'\n===== 爬取 {symbol} 数据 =====')
+        
+        # 获取最新数据时间戳
+        latest_timestamp = get_latest_timestamp(symbol)
+        
+        if latest_timestamp:
+            # 如果有数据，从最新时间的下一个5分钟开始
+            start_time = latest_timestamp
+            # 调整到下一个5分钟整点
+            minutes = start_time.minute
+            remainder = minutes % 5
+            if remainder != 0:
+                start_time = start_time.replace(minute=minutes - remainder + 5)
+            else:
+                start_time = start_time.replace(minute=minutes + 5)
+            
+            # 确保开始时间不超过结束时间
+            if start_time >= end_time:
+                print(f'{symbol} 数据已是最新，无需更新')
+                continue
+            
+            print(f'从 {start_time} 开始爬取 {symbol} 数据')
+        else:
+            # 如果没有数据，从2023年1月1日开始
+            start_time = datetime(2023, 1, 1, 0, 0, 0)
+            print(f'首次爬取 {symbol} 数据，从2023年1月1日开始')
+        
+        # 爬取数据
+        data = fetch_historical_data(symbol, start_time, end_time)
+        if data:
+            save_to_database(data)
     
     print('\n历史数据爬取完成！')
 
@@ -462,22 +523,15 @@ def main():
     print('仓库: https://github.com/idealism-L')
     print('=============================================')
     
-    print('\n请选择操作:')
-    print('1. 启动定时任务（每5分钟获取一次价格）')
-    print('2. 爬取过去3年的历史数据')
+    # 初始化数据库
+    init_database()
     
-    # 获取用户输入
-    choice = input('请输入选择 (1/2): ')
+    # 从最新数据时间开始爬取历史数据
+    fetch_historical_data_from_latest()
     
-    if choice == '1':
-        setup_scheduler()
-    elif choice == '2':
-        # 初始化数据库
-        init_database()
-        # 爬取历史数据
-        fetch_historical_data_for_3_years()
-    else:
-        print('无效的选择，请重新运行程序')
+    # 启动定时任务（每5分钟获取一次价格）
+    print('\n启动定时任务...')
+    setup_scheduler()
 
 
 if __name__ == '__main__':
