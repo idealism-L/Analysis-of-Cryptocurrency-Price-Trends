@@ -53,11 +53,7 @@ def init_database():
         cursor.execute(create_currency_table_sql)
         print("表 currencies 已创建或已存在")
         
-        # 删除旧的price_data表（如果存在）
-        cursor.execute("DROP TABLE IF EXISTS price_data")
-        print("旧的 price_data 表已删除")
-        
-        # 创建价格子表（字段冗余）
+        # 创建价格子表（字段冗余）- 只创建不存在的表
         create_price_table_sql = """
         CREATE TABLE IF NOT EXISTS price_data (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -71,12 +67,15 @@ def init_database():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
         cursor.execute(create_price_table_sql)
-        print("新的 price_data 表已创建")
+        print("表 price_data 已创建或已存在")
         
-        # 为timestamp字段创建索引，提高查询性能
-        cursor.execute("CREATE INDEX idx_price_data_timestamp ON price_data(timestamp)")
-        cursor.execute("CREATE INDEX idx_price_data_symbol ON price_data(symbol)")
-        print("已创建索引，提高查询性能")
+        # 尝试创建索引（如果不存在）
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_price_data_timestamp ON price_data(timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_price_data_symbol ON price_data(symbol)")
+            print("索引已创建或已存在")
+        except Exception as e:
+            print("索引创建失败（可能已存在）:", str(e))
         
         # 插入默认币种数据
         insert_currency_sql = """
@@ -548,9 +547,7 @@ def main():
     # 从最新数据时间开始爬取历史数据
     fetch_historical_data_from_latest()
     
-    # 启动定时任务（每5分钟获取一次价格）
-    print('\n启动定时任务...')
-    setup_scheduler()
+    print('\n历史数据爬取任务完成！')
 
 
 if __name__ == '__main__':
