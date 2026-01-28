@@ -150,6 +150,78 @@ def fetch_price(symbol):
         }
 
 
+def fetch_historical_data(symbol, start_time, end_time):
+    """
+    获取指定加密货币的历史K线数据
+    
+    参数:
+        symbol (str): 加密货币的符号，如'BTC'、'ETH'
+        start_time (datetime): 开始时间
+        end_time (datetime): 结束时间
+    
+    返回:
+        list: 包含历史价格信息的字典列表
+    """
+    try:
+        # 转换时间为毫秒时间戳
+        start_ts = int(start_time.timestamp() * 1000)
+        end_ts = int(end_time.timestamp() * 1000)
+        
+        all_data = []
+        current_start = start_ts
+        
+        # 每次请求最多获取1000条数据
+        limit = 1000
+        interval = '5m'  # 5分钟K线
+        
+        while current_start < end_ts:
+            # 计算本次请求的结束时间
+            current_end = min(current_start + (limit * 5 * 60 * 1000), end_ts)
+            
+            # 发送GET请求到币安API获取K线数据
+            url = f'https://api.binance.com/api/v3/klines'
+            params = {
+                'symbol': f'{symbol}USDT',
+                'interval': interval,
+                'startTime': current_start,
+                'endTime': current_end,
+                'limit': limit
+            }
+            
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            
+            # 解析JSON响应
+            klines = response.json()
+            
+            if not klines:
+                break
+            
+            # 处理K线数据
+            for kline in klines:
+                timestamp = datetime.fromtimestamp(kline[0] / 1000)
+                close_price = float(kline[4])  # 收盘价
+                
+                all_data.append({
+                    'symbol': symbol,
+                    'price': close_price,
+                    'timestamp': timestamp.isoformat()
+                })
+            
+            # 更新下一次请求的开始时间
+            current_start = klines[-1][0] + 1
+            
+            # 短暂暂停，避免API限制
+            time.sleep(0.1)
+        
+        print(f'成功获取 {symbol} 的 {len(all_data)} 条历史数据')
+        return all_data
+    except Exception as error:
+        # 处理异常情况
+        print(f'获取{symbol}历史数据失败:', str(error))
+        return []
+
+
 def fetch_prices():
     """
     获取BTC和ETH的价格并保存到Excel
@@ -297,6 +369,53 @@ def setup_scheduler():
         time.sleep(1)  # 暂停1秒，避免CPU占用过高
 
 
+def fetch_historical_data_for_3_years():
+    """
+    爬取过去3年的每5分钟历史数据
+    """
+    print('开始爬取过去3年的历史数据...')
+    
+    # 计算时间范围
+    end_time = datetime.now()
+    start_time_2023 = datetime(2023, 1, 1, 0, 0, 0)
+    start_time_2024 = datetime(2024, 1, 1, 0, 0, 0)
+    start_time_2025 = datetime(2025, 1, 1, 0, 0, 0)
+    start_time_2026 = datetime(2026, 1, 1, 0, 0, 0)
+    
+    # 定义要爬取的币种
+    symbols = ['BTC', 'ETH']
+    
+    # 爬取2023年数据
+    print('\n===== 爬取2023年数据 =====')
+    for symbol in symbols:
+        data_2023 = fetch_historical_data(symbol, start_time_2023, start_time_2024)
+        if data_2023:
+            save_to_database(data_2023)
+    
+    # 爬取2024年数据
+    print('\n===== 爬取2024年数据 =====')
+    for symbol in symbols:
+        data_2024 = fetch_historical_data(symbol, start_time_2024, start_time_2025)
+        if data_2024:
+            save_to_database(data_2024)
+    
+    # 爬取2025年数据
+    print('\n===== 爬取2025年数据 =====')
+    for symbol in symbols:
+        data_2025 = fetch_historical_data(symbol, start_time_2025, start_time_2026)
+        if data_2025:
+            save_to_database(data_2025)
+    
+    # 爬取2026年至今数据
+    print('\n===== 爬取2026年至今数据 =====')
+    for symbol in symbols:
+        data_2026 = fetch_historical_data(symbol, start_time_2026, end_time)
+        if data_2026:
+            save_to_database(data_2026)
+    
+    print('\n历史数据爬取完成！')
+
+
 def main():
     """
     主函数，启动加密货币价格分析工具
@@ -306,8 +425,22 @@ def main():
     print('仓库: https://github.com/idealism-L')
     print('=============================================')
     
-    # 设置并启动定时任务
-    setup_scheduler()
+    print('\n请选择操作:')
+    print('1. 启动定时任务（每5分钟获取一次价格）')
+    print('2. 爬取过去3年的历史数据')
+    
+    # 获取用户输入
+    choice = input('请输入选择 (1/2): ')
+    
+    if choice == '1':
+        setup_scheduler()
+    elif choice == '2':
+        # 初始化数据库
+        init_database()
+        # 爬取历史数据
+        fetch_historical_data_for_3_years()
+    else:
+        print('无效的选择，请重新运行程序')
 
 
 if __name__ == '__main__':
