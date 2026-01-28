@@ -172,17 +172,28 @@ def fetch_historical_data(symbol, start_time, end_time):
         start_ts = int(start_time.timestamp() * 1000)
         end_ts = int(end_time.timestamp() * 1000)
         
-        all_data = []
-        current_start = start_ts
-        
-        # 每次请求最多获取1000条数据
-        limit = 1000
+        # 每次请求最多获取500条数据，减少单次请求量
+        limit = 500
         interval = '5m'  # 5分钟K线
         request_count = 0
+        total_processed = 0
         
-        while current_start < end_ts:
+        while True:
+            # 获取最新时间戳，确保每次都从数据库最新位置开始
+            latest_time = get_latest_timestamp(symbol)
+            if latest_time:
+                current_start = int(latest_time.timestamp() * 1000) + 1
+            else:
+                current_start = start_ts
+            
+            if current_start >= end_ts:
+                print(f'{symbol} 数据已是最新，无需更新')
+                break
+            
             # 计算本次请求的结束时间
             current_end = min(current_start + (limit * 5 * 60 * 1000), end_ts)
+            
+            print(f'请求 {symbol} 数据: {datetime.fromtimestamp(current_start/1000)} 到 {datetime.fromtimestamp(current_end/1000)}')
             
             # 发送GET请求到币安API获取K线数据
             url = f'https://api.binance.com/api/v3/klines'
@@ -194,8 +205,10 @@ def fetch_historical_data(symbol, start_time, end_time):
                 'limit': limit
             }
             
-            # 添加随机延迟避免API限制
-            time.sleep(0.2 + (hash(current_start) % 10) / 20)
+            # 添加更长的随机延迟避免API限制
+            sleep_time = 1.0 + (hash(current_start) % 10) / 5
+            print(f'等待 {sleep_time:.2f} 秒后请求...')
+            time.sleep(sleep_time)
             
             response = requests.get(url, params=params)
             response.raise_for_status()
@@ -204,30 +217,38 @@ def fetch_historical_data(symbol, start_time, end_time):
             klines = response.json()
             
             if not klines:
+                print('没有更多数据，停止爬取')
                 break
             
             # 处理K线数据
+            batch_data = []
             for kline in klines:
                 timestamp = datetime.fromtimestamp(kline[0] / 1000)
                 close_price = float(kline[4])  # 收盘价
                 
-                all_data.append({
+                batch_data.append({
                     'symbol': symbol,
                     'price': close_price,
                     'timestamp': timestamp.isoformat()
                 })
             
-            # 更新下一次请求的开始时间
-            current_start = klines[-1][0] + 1
+            # 每次请求后立即保存数据
+            if batch_data:
+                print(f'保存 {len(batch_data)} 条 {symbol} 数据...')
+                save_to_database(batch_data)
+                total_processed += len(batch_data)
             
-            # 每10次请求增加更长的延迟
+            # 每3次请求增加更长的延迟
             request_count += 1
-            if request_count % 10 == 0:
-                print(f'已请求 {request_count} 次，短暂休息...')
+            if request_count % 3 == 0:
+                print(f'已请求 {request_count} 次，长时间休息...')
+                time.sleep(3)
+            else:
+                # 每次请求后都有短暂休息
                 time.sleep(1)
         
-        print(f'成功获取 {symbol} 的 {len(all_data)} 条历史数据')
-        return all_data
+        print(f'成功获取并保存 {symbol} 的 {total_processed} 条历史数据')
+        return []
     except Exception as error:
         # 处理异常情况
         print(f'获取{symbol}历史数据失败:', str(error))
@@ -506,10 +527,8 @@ def fetch_historical_data_from_latest():
             start_time = datetime(2023, 1, 1, 0, 0, 0)
             print(f'首次爬取 {symbol} 数据，从2023年1月1日开始')
         
-        # 爬取数据
-        data = fetch_historical_data(symbol, start_time, end_time)
-        if data:
-            save_to_database(data)
+        # 爬取数据（现在函数内部会自动保存）
+        fetch_historical_data(symbol, start_time, end_time)
     
     print('\n历史数据爬取完成！')
 
