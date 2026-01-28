@@ -276,6 +276,47 @@ def fetch_prices():
 fear_greed_cache = {}
 
 
+# 全局变量：存储完整的历史贪婪恐惧指数数据
+fng_history_data = None
+
+
+def fetch_fng_history():
+    """
+    获取完整的贪婪恐惧指数历史数据
+    """
+    global fng_history_data
+    
+    if fng_history_data is not None:
+        print('使用缓存的历史贪婪恐惧指数数据')
+        return fng_history_data
+    
+    try:
+        print('获取完整的贪婪恐惧指数历史数据...')
+        url = 'https://api.alternative.me/fng/?limit=2000'
+        
+        # 添加延迟避免API限制
+        time.sleep(3)
+        
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data['data'] and len(data['data']) > 0:
+            # 转换数据格式，方便查找
+            history_dict = {}
+            for item in data['data']:
+                item_date = datetime.fromtimestamp(int(item['timestamp'])).strftime('%Y-%m-%d')
+                history_dict[item_date] = int(item['value'])
+            
+            fng_history_data = history_dict
+            print(f'成功获取 {len(history_dict)} 条历史贪婪恐惧指数数据')
+            return history_dict
+        return {}
+    except Exception as error:
+        print('获取历史贪婪恐惧指数失败:', str(error))
+        return {}
+
+
 def fetch_fear_greed_index(timestamp=None):
     """
     获取比特币贪婪恐惧指数
@@ -289,32 +330,46 @@ def fetch_fear_greed_index(timestamp=None):
     try:
         if timestamp:
             # 解析时间戳获取日期
-            date = datetime.fromisoformat(timestamp).strftime('%Y-%m-%d')
+            date_obj = datetime.fromisoformat(timestamp)
+            date = date_obj.strftime('%Y-%m-%d')
             
             # 检查缓存
             if date in fear_greed_cache:
-                return fear_greed_cache[date]
+                cached_value = fear_greed_cache[date]
+                print(f'从缓存获取 {date} 的贪婪恐惧指数: {cached_value}')
+                return cached_value
             
-            # 使用Alternative.me的API获取指定日期的贪婪恐惧指数
-            url = f'https://api.alternative.me/fng/?date={date}'
+            # 获取历史数据
+            history_data = fetch_fng_history()
+            
+            # 查找对应日期的数据
+            if date in history_data:
+                index_value = history_data[date]
+                print(f'找到 {date} 的贪婪恐惧指数: {index_value}')
+                
+                # 缓存结果
+                fear_greed_cache[date] = index_value
+                return index_value
+            else:
+                print(f'未找到 {date} 的贪婪恐惧指数')
+                return None
         else:
             # 获取当前贪婪恐惧指数
+            print('请求当前贪婪恐惧指数...')
             url = 'https://api.alternative.me/fng/?limit=1'
-        
-        # 添加随机延迟避免API限制
-        time.sleep(0.5 + (hash(timestamp) % 10) / 10)
-        
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data['data'] and len(data['data']) > 0:
-            index_value = int(data['data'][0]['value'])
-            # 缓存结果
-            if timestamp:
-                fear_greed_cache[date] = index_value
-            return index_value
-        return None
+            
+            # 添加延迟避免API限制
+            time.sleep(1)
+            
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data['data'] and len(data['data']) > 0:
+                index_value = int(data['data'][0]['value'])
+                print(f'获取到当前贪婪恐惧指数: {index_value}')
+                return index_value
+            return None
     except Exception as error:
         # 处理异常情况
         if timestamp:
@@ -486,64 +541,7 @@ def get_latest_timestamp(symbol):
         return None
 
 
-def update_fear_greed_indexes():
-    """
-    更新现有数据的贪婪恐惧指数
-    """
-    print('开始更新贪婪恐惧指数...')
-    
-    try:
-        conn = get_db_connection()
-        if not conn:
-            return
-        
-        cursor = conn.cursor()
-        
-        # 获取所有不同的日期
-        cursor.execute("""
-        SELECT DISTINCT DATE(timestamp) as date
-        FROM price_data
-        WHERE fear_greed_index IS NULL
-        ORDER BY date
-        """)
-        
-        dates = cursor.fetchall()
-        print(f'发现 {len(dates)} 个日期需要更新贪婪恐惧指数')
-        
-        # 处理每个日期
-        for date_tuple in dates:
-            date = date_tuple[0]
-            date_str = date.strftime('%Y-%m-%d')
-            
-            print(f'获取 {date_str} 的贪婪恐惧指数...')
-            
-            # 构建时间戳（使用当天中午12点）
-            timestamp = datetime.combine(date, datetime.min.time())
-            timestamp_str = timestamp.isoformat()
-            
-            # 获取该日期的贪婪恐惧指数
-            fear_greed_index = fetch_fear_greed_index(timestamp_str)
-            
-            if fear_greed_index is not None:
-                # 更新该日期的所有数据
-                update_sql = """
-                UPDATE price_data
-                SET fear_greed_index = %s
-                WHERE DATE(timestamp) = %s
-                """
-                cursor.execute(update_sql, (fear_greed_index, date))
-                conn.commit()
-                
-                print(f'已更新 {cursor.rowcount} 条数据的贪婪恐惧指数为 {fear_greed_index}')
-            
-            # 短暂暂停，避免API限制
-            time.sleep(1)
-        
-        cursor.close()
-        conn.close()
-        print('\n贪婪恐惧指数更新完成！')
-    except Exception as error:
-        print('更新贪婪恐惧指数失败:', str(error))
+
 
 
 def fetch_historical_data_from_latest():
@@ -604,22 +602,10 @@ def main():
     # 初始化数据库
     init_database()
     
-    print('\n请选择操作:')
-    print('1. 爬取历史数据')
-    print('2. 更新现有数据的贪婪恐惧指数')
+    # 从最新数据时间开始爬取历史数据
+    fetch_historical_data_from_latest()
     
-    # 获取用户输入
-    choice = input('请输入选择 (1/2): ')
-    
-    if choice == '1':
-        # 从最新数据时间开始爬取历史数据
-        fetch_historical_data_from_latest()
-        print('\n历史数据爬取任务完成！')
-    elif choice == '2':
-        # 更新现有数据的贪婪恐惧指数
-        update_fear_greed_indexes()
-    else:
-        print('无效的选择，请重新运行程序')
+    print('\n历史数据爬取任务完成！')
 
 
 if __name__ == '__main__':
