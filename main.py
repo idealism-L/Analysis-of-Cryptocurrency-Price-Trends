@@ -73,6 +73,11 @@ def init_database():
         cursor.execute(create_price_table_sql)
         print("新的 price_data 表已创建")
         
+        # 为timestamp字段创建索引，提高查询性能
+        cursor.execute("CREATE INDEX idx_price_data_timestamp ON price_data(timestamp)")
+        cursor.execute("CREATE INDEX idx_price_data_symbol ON price_data(symbol)")
+        print("已创建索引，提高查询性能")
+        
         # 插入默认币种数据
         insert_currency_sql = """
         INSERT IGNORE INTO currencies (symbol, name)
@@ -240,23 +245,40 @@ def fetch_prices():
     save_to_database(data)
 
 
-def fetch_fear_greed_index():
+def fetch_fear_greed_index(timestamp=None):
     """
     获取比特币贪婪恐惧指数
+    
+    参数:
+        timestamp (str, optional): 时间戳，格式为ISO 8601
     
     返回:
         int: 贪婪恐惧指数 (0-100)
     """
     try:
-        # 使用Alternative.me的API获取贪婪恐惧指数
-        response = requests.get('https://api.alternative.me/fng/?limit=1')
+        if timestamp:
+            # 解析时间戳获取日期
+            date = datetime.fromisoformat(timestamp).strftime('%Y-%m-%d')
+            # 使用Alternative.me的API获取指定日期的贪婪恐惧指数
+            url = f'https://api.alternative.me/fng/?date={date}'
+        else:
+            # 获取当前贪婪恐惧指数
+            url = 'https://api.alternative.me/fng/?limit=1'
+        
+        response = requests.get(url)
         response.raise_for_status()
         data = response.json()
+        
         if data['data'] and len(data['data']) > 0:
             return int(data['data'][0]['value'])
         return None
     except Exception as error:
-        print('获取贪婪恐惧指数失败:', str(error))
+        # 处理异常情况
+        if timestamp:
+            date = datetime.fromisoformat(timestamp).strftime('%Y-%m-%d')
+            print(f'获取{date}贪婪恐惧指数失败:', str(error))
+        else:
+            print('获取当前贪婪恐惧指数失败:', str(error))
         return None
 
 
@@ -275,13 +297,12 @@ def save_to_database(data):
         
         cursor = conn.cursor()
         
-        # 获取贪婪恐惧指数
-        fear_greed_index = fetch_fear_greed_index()
-        print(f"当前贪婪恐惧指数: {fear_greed_index}")
-        
         # 准备插入数据
         insert_data = []
-        for item in data:
+        batch_size = 100  # 每批次处理的记录数
+        total_processed = 0
+        
+        for i, item in enumerate(data):
             # 解析时间戳
             timestamp = datetime.fromisoformat(item['timestamp'])
             
@@ -294,6 +315,13 @@ def save_to_database(data):
             
             currency_id = currency_result[0]
             
+            # 获取该时间点的贪婪恐惧指数
+            fear_greed_index = fetch_fear_greed_index(item['timestamp'])
+            
+            # 每100条打印一次进度
+            if (i + 1) % batch_size == 0:
+                print(f"处理进度: {i + 1}/{len(data)}")
+            
             insert_data.append((
                 currency_id,
                 item['symbol'],
@@ -301,24 +329,33 @@ def save_to_database(data):
                 fear_greed_index,
                 timestamp
             ))
+            
+            total_processed += 1
+            
+            # 每1000条数据执行一次批量插入
+            if len(insert_data) >= 1000:
+                # 执行批量插入
+                insert_sql = """
+                INSERT INTO price_data (currency_id, symbol, price, fear_greed_index, timestamp)
+                VALUES (%s, %s, %s, %s, %s)
+                """
+                cursor.executemany(insert_sql, insert_data)
+                conn.commit()
+                
+                print(f"已保存 {len(insert_data)} 条数据")
+                insert_data = []
         
-        if not insert_data:
-            print("没有数据可保存")
-            cursor.close()
-            conn.close()
-            return
+        # 处理剩余数据
+        if insert_data:
+            insert_sql = """
+            INSERT INTO price_data (currency_id, symbol, price, fear_greed_index, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+            """
+            cursor.executemany(insert_sql, insert_data)
+            conn.commit()
+            print(f"已保存 {len(insert_data)} 条数据")
         
-        # 执行批量插入
-        insert_sql = """
-        INSERT INTO price_data (currency_id, symbol, price, fear_greed_index, timestamp)
-        VALUES (%s, %s, %s, %s, %s)
-        """
-        cursor.executemany(insert_sql, insert_data)
-        
-        # 提交事务
-        conn.commit()
-        
-        print(f"成功保存 {len(insert_data)} 条价格数据到数据库")
+        print(f"成功保存 {total_processed} 条价格数据到数据库")
         
         # 关闭连接
         cursor.close()
