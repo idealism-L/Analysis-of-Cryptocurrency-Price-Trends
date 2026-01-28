@@ -228,20 +228,24 @@ class InvestmentAnalyzer:
                     return self.daily_fng[stored_date]
         return None
     
-    def calculate_investment_amount(self):
+    def calculate_investment_amount(self, fng):
         """
-        根据当前资金计算投资金额
+        根据贪婪恐惧指数计算投资金额
         """
-        # 每1wu为一个档位
-        level = int(self.current_funds // 10000)
-        # 最低100u
-        return max(100, level * 100)
+        if fng < 20:
+            return 300  # 20以下买入300u
+        elif fng < 25:
+            return 200  # 25以下买入200u
+        elif fng < 30:
+            return 100  # 30以下买入100u
+        else:
+            return 0  # 30以上不买入
     
-    def buy_btc(self, date, price):
+    def buy_btc(self, date, price, fng):
         """
         买入BTC
         """
-        investment_amount = self.calculate_investment_amount()
+        investment_amount = self.calculate_investment_amount(fng)
         
         # 检查资金是否足够
         if self.current_funds < investment_amount:
@@ -281,7 +285,7 @@ class InvestmentAnalyzer:
         self.last_buy_date = date
         return True
     
-    def sell_btc(self, date, price):
+    def sell_btc(self, date, price, fng):
         """
         卖出BTC
         """
@@ -289,8 +293,18 @@ class InvestmentAnalyzer:
             print(f"{date}: 没有BTC可卖")
             return False
         
-        # 卖出10%的BTC
-        sell_amount = self.btc_holdings * 0.1
+        # 根据贪婪恐惧指数确定卖出比例
+        if fng >= 80:
+            sell_percentage = 0.05  # 80以上卖出5%
+        elif fng >= 75:
+            sell_percentage = 0.03  # 75以上卖出3%
+        elif fng >= 70:
+            sell_percentage = 0.02  # 70以上卖出2%
+        else:
+            return False  # 70以下不卖出
+        
+        # 计算卖出数量
+        sell_amount = self.btc_holdings * sell_percentage
         sell_value = sell_amount * price
         
         # 更新持仓和资金
@@ -331,8 +345,8 @@ class InvestmentAnalyzer:
         print("        加密货币投资策略分析")
         print("=" * 90)
         print(f"初始资金: ${self.initial_funds:.2f}")
-        print("投资策略: 贪婪恐惧指数30以下买入，70以上卖出10%，30-70不操作")
-        print("买入金额: 每1wu为一个档位，最低100u")
+        print("投资策略: 贪婪恐惧指数30以下买入100u，25以下买入200u，20以下买入300u")
+        print("卖出策略: 70以上卖出2%，75以上卖出3%，80以上卖出5%")
         print("时间范围: 2023年1月1日 - 2025年12月31日")
         print("=" * 90)
         
@@ -367,12 +381,12 @@ class InvestmentAnalyzer:
                     # 贪婪恐惧指数30以下，买入
                     if self.last_buy_date != date_str:
                         print(f"\n{date_str}: 贪婪恐惧指数={fng}, 均价=${avg_price:.2f}")
-                        self.buy_btc(date_str, avg_price)
-                elif fng > 70:
-                    # 贪婪恐惧指数70以上，卖出10%
+                        self.buy_btc(date_str, avg_price, fng)
+                elif fng >= 70:
+                    # 贪婪恐惧指数70以上，根据不同区间卖出不同比例
                     if self.last_sell_date != date_str:
                         print(f"\n{date_str}: 贪婪恐惧指数={fng}, 均价=${avg_price:.2f}")
-                        self.sell_btc(date_str, avg_price)
+                        self.sell_btc(date_str, avg_price, fng)
                 # 30-70区间，不操作，不输出
             else:
                 # 调试：检查数据缺失情况
