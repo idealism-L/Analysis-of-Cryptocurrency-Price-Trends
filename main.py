@@ -71,11 +71,36 @@ def init_database():
         
         # 尝试创建索引（如果不存在）
         try:
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_price_data_timestamp ON price_data(timestamp)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_price_data_symbol ON price_data(symbol)")
-            print("索引已创建或已存在")
+            # 检查索引是否存在
+            cursor.execute("""
+            SELECT COUNT(*) 
+            FROM information_schema.STATISTICS 
+            WHERE table_schema = DATABASE() 
+            AND table_name = 'price_data' 
+            AND index_name = 'idx_price_data_timestamp'
+            """)
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("CREATE INDEX idx_price_data_timestamp ON price_data(timestamp)")
+                print("创建索引 idx_price_data_timestamp 成功")
+            else:
+                print("索引 idx_price_data_timestamp 已存在")
+            
+            cursor.execute("""
+            SELECT COUNT(*) 
+            FROM information_schema.STATISTICS 
+            WHERE table_schema = DATABASE() 
+            AND table_name = 'price_data' 
+            AND index_name = 'idx_price_data_symbol'
+            """)
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("CREATE INDEX idx_price_data_symbol ON price_data(symbol)")
+                print("创建索引 idx_price_data_symbol 成功")
+            else:
+                print("索引 idx_price_data_symbol 已存在")
+            
+            print("索引检查完成")
         except Exception as e:
-            print("索引创建失败（可能已存在）:", str(e))
+            print("索引操作失败:", str(e))
         
         # 插入默认币种数据
         insert_currency_sql = """
@@ -336,7 +361,10 @@ def fetch_fear_greed_index(timestamp=None):
             # 检查缓存
             if date in fear_greed_cache:
                 cached_value = fear_greed_cache[date]
-                print(f'从缓存获取 {date} 的贪婪恐惧指数: {cached_value}')
+                # 只在首次从缓存获取时打印消息
+                if not hasattr(fetch_fear_greed_index, 'last_cached_date') or fetch_fear_greed_index.last_cached_date != date:
+                    print(f'从缓存获取 {date} 的贪婪恐惧指数: {cached_value}')
+                    fetch_fear_greed_index.last_cached_date = date
                 return cached_value
             
             # 获取历史数据
@@ -569,9 +597,23 @@ def fetch_historical_data_from_latest():
             minutes = start_time.minute
             remainder = minutes % 5
             if remainder != 0:
-                start_time = start_time.replace(minute=minutes - remainder + 5)
+                # 计算到下一个5分钟
+                next_minute = minutes - remainder + 5
+                if next_minute >= 60:
+                    # 进位到下一个小时
+                    start_time = start_time.replace(minute=0)
+                    start_time = start_time.replace(hour=start_time.hour + 1)
+                else:
+                    start_time = start_time.replace(minute=next_minute)
             else:
-                start_time = start_time.replace(minute=minutes + 5)
+                # 当前已经是5分钟整点，跳到下一个
+                next_minute = minutes + 5
+                if next_minute >= 60:
+                    # 进位到下一个小时
+                    start_time = start_time.replace(minute=0)
+                    start_time = start_time.replace(hour=start_time.hour + 1)
+                else:
+                    start_time = start_time.replace(minute=next_minute)
             
             # 确保开始时间不超过结束时间
             if start_time >= end_time:

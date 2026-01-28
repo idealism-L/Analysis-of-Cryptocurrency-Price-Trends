@@ -1,0 +1,463 @@
+# 导入必要的库
+import pymysql
+from datetime import datetime, timedelta
+import json
+
+# MySQL数据库配置
+DB_CONFIG = {
+    'host': 'localhost',
+    'user': 'root',
+    'password': '123456',
+    'database': 'cryptocurrency_analysis',
+    'charset': 'utf8mb4'
+}
+
+class InvestmentAnalyzer:
+    def __init__(self):
+        self.initial_funds = 10000  # 初始资金1wu
+        self.current_funds = 10000  # 当前资金
+        self.btc_holdings = 0  # 持有BTC数量
+        self.trade_records = []  # 交易记录
+        self.last_buy_date = None  # 上次买入日期
+        self.last_sell_date = None  # 上次卖出日期
+        self.create_trade_table()  # 创建交易记录表
+        self.clear_trade_table()  # 清空交易记录表
+    
+    def get_db_connection(self):
+        """
+        获取数据库连接
+        """
+        try:
+            conn = pymysql.connect(
+                host=DB_CONFIG['host'],
+                user=DB_CONFIG['user'],
+                password=DB_CONFIG['password'],
+                database=DB_CONFIG['database'],
+                charset=DB_CONFIG['charset']
+            )
+            return conn
+        except Exception as error:
+            print('数据库连接失败:', str(error))
+            return None
+    
+    def create_trade_table(self):
+        """
+        创建交易记录表
+        """
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            
+            cursor = conn.cursor()
+            
+            # 创建交易记录表
+            create_table_sql = """
+            CREATE TABLE IF NOT EXISTS trade_records (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                date DATE NOT NULL,
+                type VARCHAR(10) NOT NULL,
+                amount DECIMAL(20, 8) NOT NULL,
+                price DECIMAL(20, 2) NOT NULL,
+                total_usd DECIMAL(20, 2) NOT NULL,
+                btc_holdings DECIMAL(20, 8) NOT NULL,
+                remaining_usd DECIMAL(20, 2) NOT NULL,
+                account_total DECIMAL(20, 2) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+            cursor.execute(create_table_sql)
+            conn.commit()
+            print("交易记录表已创建或已存在")
+            
+            cursor.close()
+            conn.close()
+        except Exception as error:
+            print('创建交易记录表失败:', str(error))
+    
+    def clear_trade_table(self):
+        """
+        清空交易记录表
+        """
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            
+            cursor = conn.cursor()
+            
+            # 清空表数据
+            cursor.execute("TRUNCATE TABLE trade_records")
+            conn.commit()
+            print("交易记录表已清空")
+            
+            cursor.close()
+            conn.close()
+        except Exception as error:
+            print('清空交易记录表失败:', str(error))
+    
+    def save_trade_to_database(self, trade_record):
+        """
+        将交易记录保存到数据库
+        """
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return
+            
+            cursor = conn.cursor()
+            
+            # 插入交易记录
+            insert_sql = """
+            INSERT INTO trade_records (
+                date, type, amount, price, total_usd, btc_holdings, remaining_usd, account_total
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(insert_sql, (
+                trade_record['date'],
+                trade_record['type'],
+                trade_record['amount'],
+                trade_record['price'],
+                trade_record['total_usd'],
+                trade_record['btc_holdings'],
+                trade_record['remaining_usd'],
+                trade_record['account_total']
+            ))
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+        except Exception as error:
+            print('保存交易记录到数据库失败:', str(error))
+    
+    def preload_data(self):
+        """
+        预加载所有需要的数据，减少数据库连接次数
+        """
+        print("正在预加载数据...")
+        
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return False
+            
+            cursor = conn.cursor()
+            
+            # 预加载BTC的日均价
+            self.daily_prices = {}
+            query = """
+            SELECT DATE(timestamp) as date, AVG(price) as avg_price
+            FROM price_data
+            WHERE symbol = 'BTC' AND DATE(timestamp) BETWEEN '2023-01-01' AND '2025-12-31'
+            GROUP BY DATE(timestamp)
+            """
+            cursor.execute(query)
+            for row in cursor.fetchall():
+                # 确保日期是字符串格式
+                date_str = row[0].strftime('%Y-%m-%d') if hasattr(row[0], 'strftime') else str(row[0])
+                self.daily_prices[date_str] = float(row[1])
+            
+            # 预加载贪婪恐惧指数
+            self.daily_fng = {}
+            query = """
+            SELECT DATE(timestamp) as date, MAX(fear_greed_index) as fear_greed_index
+            FROM price_data
+            WHERE fear_greed_index IS NOT NULL AND DATE(timestamp) BETWEEN '2023-01-01' AND '2025-12-31'
+            GROUP BY DATE(timestamp)
+            """
+            cursor.execute(query)
+            for row in cursor.fetchall():
+                # 确保日期是字符串格式
+                date_str = row[0].strftime('%Y-%m-%d') if hasattr(row[0], 'strftime') else str(row[0])
+                self.daily_fng[date_str] = int(row[1])
+            
+            cursor.close()
+            conn.close()
+            
+            # 打印一些样本数据用于调试
+            print(f"预加载完成: {len(self.daily_prices)} 天价格数据, {len(self.daily_fng)} 天贪婪恐惧指数数据")
+            
+            # 打印前5天的数据样本
+            print("\n数据样本:")
+            sample_dates = list(self.daily_prices.keys())[:5]
+            for date in sample_dates:
+                fng = self.daily_fng.get(date, 'N/A')
+                price = self.daily_prices.get(date, 'N/A')
+                print(f"{date}: FNG={fng}, Price={price}")
+            
+            # 打印一些应该触发交易的日期
+            print("\n潜在交易日期:")
+            for date, fng in self.daily_fng.items():
+                if fng < 30 and date in self.daily_prices:
+                    print(f"{date}: FNG={fng} (买入信号)")
+                elif fng > 65 and date in self.daily_prices:
+                    print(f"{date}: FNG={fng} (卖出信号)")
+            
+            return True
+        except Exception as error:
+            print('预加载数据失败:', str(error))
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def get_daily_average_price(self, symbol, date):
+        """
+        获取指定日期的日均价
+        """
+        if hasattr(self, 'daily_prices'):
+            # 尝试直接匹配
+            if date in self.daily_prices:
+                return self.daily_prices[date]
+            # 尝试不同格式的日期匹配
+            for stored_date in self.daily_prices:
+                if str(stored_date) == date:
+                    return self.daily_prices[stored_date]
+        return None
+    
+    def get_daily_fear_greed_index(self, date):
+        """
+        获取指定日期的贪婪恐惧指数
+        """
+        if hasattr(self, 'daily_fng'):
+            # 尝试直接匹配
+            if date in self.daily_fng:
+                return self.daily_fng[date]
+            # 尝试不同格式的日期匹配
+            for stored_date in self.daily_fng:
+                if str(stored_date) == date:
+                    return self.daily_fng[stored_date]
+        return None
+    
+    def calculate_investment_amount(self):
+        """
+        根据当前资金计算投资金额
+        """
+        # 每1wu为一个档位
+        level = int(self.current_funds // 10000)
+        # 最低100u
+        return max(100, level * 100)
+    
+    def buy_btc(self, date, price):
+        """
+        买入BTC
+        """
+        investment_amount = self.calculate_investment_amount()
+        
+        # 检查资金是否足够
+        if self.current_funds < investment_amount:
+            print(f"{date}: 资金不足，无法买入 {investment_amount} 美元的BTC")
+            return False
+        
+        # 计算可购买的BTC数量
+        btc_amount = investment_amount / price
+        
+        # 更新持仓和资金
+        self.btc_holdings += btc_amount
+        self.current_funds -= investment_amount
+        
+        # 计算账户总额
+        account_total = self.current_funds + (self.btc_holdings * price)
+        
+        # 记录交易
+        trade_record = {
+            'date': date,
+            'type': 'buy',
+            'price': price,
+            'amount': btc_amount,
+            'total_usd': investment_amount,
+            'btc_holdings': self.btc_holdings,
+            'remaining_usd': self.current_funds,
+            'account_total': account_total
+        }
+        self.trade_records.append(trade_record)
+        
+        # 保存到数据库
+        self.save_trade_to_database(trade_record)
+        
+        print(f"{date}: 买入 {btc_amount:.6f} BTC, 价格: ${price:.2f}, 花费: ${investment_amount:.2f}")
+        print(f"  当前持有: {self.btc_holdings:.6f} BTC, 剩余资金: ${self.current_funds:.2f}")
+        print(f"  账户总额: ${account_total:.2f}")
+        
+        self.last_buy_date = date
+        return True
+    
+    def sell_btc(self, date, price):
+        """
+        卖出BTC
+        """
+        if self.btc_holdings <= 0:
+            print(f"{date}: 没有BTC可卖")
+            return False
+        
+        # 卖出10%的BTC
+        sell_amount = self.btc_holdings * 0.1
+        sell_value = sell_amount * price
+        
+        # 更新持仓和资金
+        self.btc_holdings -= sell_amount
+        self.current_funds += sell_value
+        
+        # 计算账户总额
+        account_total = self.current_funds + (self.btc_holdings * price)
+        
+        # 记录交易
+        trade_record = {
+            'date': date,
+            'type': 'sell',
+            'price': price,
+            'amount': sell_amount,
+            'total_usd': sell_value,
+            'btc_holdings': self.btc_holdings,
+            'remaining_usd': self.current_funds,
+            'account_total': account_total
+        }
+        self.trade_records.append(trade_record)
+        
+        # 保存到数据库
+        self.save_trade_to_database(trade_record)
+        
+        print(f"{date}: 卖出 {sell_amount:.6f} BTC, 价格: ${price:.2f}, 获得: ${sell_value:.2f}")
+        print(f"  当前持有: {self.btc_holdings:.6f} BTC, 剩余资金: ${self.current_funds:.2f}")
+        print(f"  账户总额: ${account_total:.2f}")
+        
+        self.last_sell_date = date
+        return True
+    
+    def analyze_investment(self):
+        """
+        分析投资策略
+        """
+        print("\n" + "=" * 90)
+        print("        加密货币投资策略分析")
+        print("=" * 90)
+        print(f"初始资金: ${self.initial_funds:.2f}")
+        print("投资策略: 贪婪恐惧指数30以下买入，70以上卖出10%，30-70不操作")
+        print("买入金额: 每1wu为一个档位，最低100u")
+        print("时间范围: 2023年1月1日 - 2025年12月31日")
+        print("=" * 90)
+        
+        # 预加载数据
+        if not self.preload_data():
+            print("数据预加载失败，无法继续分析")
+            return
+        
+        # 遍历2023-2025年的每一天
+        start_date = datetime(2023, 1, 1)
+        end_date = datetime(2025, 12, 31)
+        current_date = start_date
+        
+        while current_date <= end_date:
+            date_str = current_date.strftime('%Y-%m-%d')
+            
+            # 获取当日的贪婪恐惧指数
+            fng = self.get_daily_fear_greed_index(date_str)
+            if fng is None:
+                current_date += timedelta(days=1)
+                continue
+            
+            # 获取当日均价
+            avg_price = self.get_daily_average_price('BTC', date_str)
+            if avg_price is None:
+                current_date += timedelta(days=1)
+                continue
+            
+            # 检查是否需要操作
+            if fng is not None and avg_price is not None:
+                if fng < 30:
+                    # 贪婪恐惧指数30以下，买入
+                    if self.last_buy_date != date_str:
+                        print(f"\n{date_str}: 贪婪恐惧指数={fng}, 均价=${avg_price:.2f}")
+                        self.buy_btc(date_str, avg_price)
+                elif fng > 70:
+                    # 贪婪恐惧指数70以上，卖出10%
+                    if self.last_sell_date != date_str:
+                        print(f"\n{date_str}: 贪婪恐惧指数={fng}, 均价=${avg_price:.2f}")
+                        self.sell_btc(date_str, avg_price)
+                # 30-70区间，不操作，不输出
+            else:
+                # 调试：检查数据缺失情况
+                if fng is None:
+                    print(f"{date_str}: 无贪婪恐惧指数数据")
+                if avg_price is None:
+                    print(f"{date_str}: 无价格数据")
+            
+            current_date += timedelta(days=1)
+        
+        # 分析结束，输出结果
+        self.print_summary()
+    
+    def print_summary(self):
+        """
+        输出投资总结
+        """
+        print("\n" + "=" * 90)
+        print("        投资策略分析总结")
+        print("=" * 90)
+        
+        # 计算最终价值（以2025年12月31日价格估算）
+        final_price = self.get_daily_average_price('BTC', '2025-12-31')
+        if final_price:
+            btc_value = self.btc_holdings * final_price
+            total_value = self.current_funds + btc_value
+            
+            print(f"初始资金: ${self.initial_funds:.2f}")
+            print(f"最终资金: ${self.current_funds:.2f}")
+            print(f"最终持有BTC: {self.btc_holdings:.6f}")
+            print(f"BTC最终价格: ${final_price:.2f}")
+            print(f"BTC价值: ${btc_value:.2f}")
+            print(f"总价值 (BTC+U): ${total_value:.2f}")
+            print(f"收益率: {(total_value / self.initial_funds - 1) * 100:.2f}%")
+        else:
+            print(f"初始资金: ${self.initial_funds:.2f}")
+            print(f"最终资金: ${self.current_funds:.2f}")
+            print(f"最终持有BTC: {self.btc_holdings:.6f}")
+            print("无法计算总价值（缺少最终价格数据）")
+        
+        print(f"\n交易统计:")
+        print(f"- 交易次数: {len(self.trade_records)}")
+        print(f"- 买入次数: {sum(1 for r in self.trade_records if r['type'] == 'buy')}")
+        print(f"- 卖出次数: {sum(1 for r in self.trade_records if r['type'] == 'sell')}")
+        
+        # 输出交易记录（美化格式）
+        if self.trade_records:
+            print("\n交易记录:")
+            # 使用固定宽度的格式字符串，确保精确对齐
+            # 列格式: 日期(12) 类型(8) 数量(12) 价格(12) 金额(12) 持有BTC(12) 剩余U(12) 总额U(12)
+            format_str = "{:<12} {:<8} {:<12} {:<12} {:<12} {:<12} {:<12} {:<12}"
+            
+            # 打印表头
+            print(format_str.format('日期', '类型', '数量', '价格', '金额', '持有BTC', '剩余U', '总额U'))
+            print('=' * 95)  # 精确计算的分隔线长度
+            
+            # 打印数据行
+            for record in self.trade_records:
+                account_total = record.get('account_total', self.current_funds + (self.btc_holdings * record['price']))
+                print(format_str.format(
+                    record['date'],
+                    record['type'].upper(),
+                    f"{record['amount']:.6f}",
+                    f"${record['price']:.2f}",
+                    f"${record['total_usd']:.2f}",
+                    f"{record['btc_holdings']:.6f}",
+                    f"${record['remaining_usd']:.2f}",
+                    f"${account_total:.2f}"
+                ))
+            
+            # 打印底部分隔线
+            print('=' * 95)
+        
+        # 保存交易记录到文件
+        with open('trade_records.json', 'w', encoding='utf-8') as f:
+            json.dump(self.trade_records, f, indent=2, ensure_ascii=False)
+        print("\n交易记录已保存到 trade_records.json 文件")
+        print("=" * 90)
+
+def main():
+    """
+    主函数
+    """
+    analyzer = InvestmentAnalyzer()
+    analyzer.analyze_investment()
+
+if __name__ == '__main__':
+    main()
