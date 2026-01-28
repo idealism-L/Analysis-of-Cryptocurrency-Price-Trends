@@ -60,7 +60,6 @@ def init_database():
             currency_id INT NOT NULL,
             symbol VARCHAR(10) NOT NULL,
             price DECIMAL(20, 2) NULL,
-            fear_greed_index INT NULL,
             timestamp DATETIME NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (currency_id) REFERENCES currencies(id)
@@ -408,6 +407,50 @@ def fetch_fear_greed_index(timestamp=None):
         return None
 
 
+def save_fear_greed_index(date, value):
+    """
+    将贪婪恐惧指数数据保存到MySQL数据库
+    
+    参数:
+        date (str): 日期，格式为YYYY-MM-DD
+        value (int): 贪婪恐惧指数值
+    """
+    try:
+        # 获取数据库连接
+        conn = get_db_connection()
+        if not conn:
+            return
+        
+        cursor = conn.cursor()
+        
+        # 插入或更新贪婪恐惧指数数据
+        insert_sql = """
+        INSERT INTO fear_greed_index (date, value)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE value = VALUES(value)
+        """
+        
+        cursor.execute(insert_sql, (date, value))
+        conn.commit()
+        
+        # 关闭连接
+        cursor.close()
+        conn.close()
+    except Exception as error:
+        # 处理保存失败的情况
+        print('保存贪婪恐惧指数到数据库失败:', str(error))
+        # 关闭连接
+        if 'cursor' in locals() and cursor:
+            try:
+                cursor.close()
+            except:
+                pass
+        if 'conn' in locals() and conn:
+            try:
+                conn.close()
+            except:
+                pass
+
 def save_to_database(data):
     """
     将价格数据保存到MySQL数据库
@@ -444,6 +487,11 @@ def save_to_database(data):
             # 获取该时间点的贪婪恐惧指数
             fear_greed_index = fetch_fear_greed_index(item['timestamp'])
             
+            # 如果获取到贪婪恐惧指数，保存到新表
+            if fear_greed_index is not None:
+                date_str = timestamp.strftime('%Y-%m-%d')
+                save_fear_greed_index(date_str, fear_greed_index)
+            
             # 每100条打印一次进度
             if (i + 1) % batch_size == 0:
                 print(f"处理进度: {i + 1}/{len(data)}")
@@ -452,7 +500,6 @@ def save_to_database(data):
                 currency_id,
                 item['symbol'],
                 item['price'],
-                fear_greed_index,
                 timestamp
             ))
             
@@ -462,8 +509,8 @@ def save_to_database(data):
             if len(insert_data) >= 1000:
                 # 执行批量插入
                 insert_sql = """
-                INSERT INTO price_data (currency_id, symbol, price, fear_greed_index, timestamp)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO price_data (currency_id, symbol, price, timestamp)
+                VALUES (%s, %s, %s, %s)
                 """
                 cursor.executemany(insert_sql, insert_data)
                 conn.commit()
@@ -474,8 +521,8 @@ def save_to_database(data):
         # 处理剩余数据
         if insert_data:
             insert_sql = """
-            INSERT INTO price_data (currency_id, symbol, price, fear_greed_index, timestamp)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO price_data (currency_id, symbol, price, timestamp)
+            VALUES (%s, %s, %s, %s)
             """
             cursor.executemany(insert_sql, insert_data)
             conn.commit()

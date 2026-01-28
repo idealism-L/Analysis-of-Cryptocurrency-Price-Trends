@@ -148,7 +148,7 @@ class InvestmentAnalyzer:
             query = """
             SELECT DATE(timestamp) as date, AVG(price) as avg_price
             FROM price_data
-            WHERE symbol = 'BTC' AND DATE(timestamp) BETWEEN '2023-01-01' AND '2025-12-31'
+            WHERE symbol = 'BTC' AND DATE(timestamp) >= '2023-01-01'
             GROUP BY DATE(timestamp)
             """
             cursor.execute(query)
@@ -160,10 +160,10 @@ class InvestmentAnalyzer:
             # 预加载贪婪恐惧指数
             self.daily_fng = {}
             query = """
-            SELECT DATE(timestamp) as date, MAX(fear_greed_index) as fear_greed_index
-            FROM price_data
-            WHERE fear_greed_index IS NOT NULL AND DATE(timestamp) BETWEEN '2023-01-01' AND '2025-12-31'
-            GROUP BY DATE(timestamp)
+            SELECT date, value as fear_greed_index
+            FROM fear_greed_index
+            WHERE date >= '2023-01-01'
+            ORDER BY date
             """
             cursor.execute(query)
             for row in cursor.fetchall():
@@ -347,7 +347,7 @@ class InvestmentAnalyzer:
         print(f"初始资金: ${self.initial_funds:.2f}")
         print("投资策略: 贪婪恐惧指数30以下买入100u，25以下买入200u，20以下买入300u")
         print("卖出策略: 70以上卖出2%，75以上卖出3%，80以上卖出5%")
-        print("时间范围: 2023年1月1日 - 2025年12月31日")
+        print(f"时间范围: 2023年1月1日 - {datetime.now().strftime('%Y年%m月%d日')}")
         print("=" * 90)
         
         # 预加载数据
@@ -355,9 +355,9 @@ class InvestmentAnalyzer:
             print("数据预加载失败，无法继续分析")
             return
         
-        # 遍历2023-2025年的每一天
+        # 遍历2023年到现在的每一天
         start_date = datetime(2023, 1, 1)
-        end_date = datetime(2025, 12, 31)
+        end_date = datetime.now()
         current_date = start_date
         
         while current_date <= end_date:
