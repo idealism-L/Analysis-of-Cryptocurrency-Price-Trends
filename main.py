@@ -486,9 +486,69 @@ def get_latest_timestamp(symbol):
         return None
 
 
+def update_fear_greed_indexes():
+    """
+    更新现有数据的贪婪恐惧指数
+    """
+    print('开始更新贪婪恐惧指数...')
+    
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        
+        cursor = conn.cursor()
+        
+        # 获取所有不同的日期
+        cursor.execute("""
+        SELECT DISTINCT DATE(timestamp) as date
+        FROM price_data
+        WHERE fear_greed_index IS NULL
+        ORDER BY date
+        """)
+        
+        dates = cursor.fetchall()
+        print(f'发现 {len(dates)} 个日期需要更新贪婪恐惧指数')
+        
+        # 处理每个日期
+        for date_tuple in dates:
+            date = date_tuple[0]
+            date_str = date.strftime('%Y-%m-%d')
+            
+            print(f'获取 {date_str} 的贪婪恐惧指数...')
+            
+            # 构建时间戳（使用当天中午12点）
+            timestamp = datetime.combine(date, datetime.min.time())
+            timestamp_str = timestamp.isoformat()
+            
+            # 获取该日期的贪婪恐惧指数
+            fear_greed_index = fetch_fear_greed_index(timestamp_str)
+            
+            if fear_greed_index is not None:
+                # 更新该日期的所有数据
+                update_sql = """
+                UPDATE price_data
+                SET fear_greed_index = %s
+                WHERE DATE(timestamp) = %s
+                """
+                cursor.execute(update_sql, (fear_greed_index, date))
+                conn.commit()
+                
+                print(f'已更新 {cursor.rowcount} 条数据的贪婪恐惧指数为 {fear_greed_index}')
+            
+            # 短暂暂停，避免API限制
+            time.sleep(1)
+        
+        cursor.close()
+        conn.close()
+        print('\n贪婪恐惧指数更新完成！')
+    except Exception as error:
+        print('更新贪婪恐惧指数失败:', str(error))
+
+
 def fetch_historical_data_from_latest():
     """
-    从数据库中最新数据的时间开始爬取历史数据
+    从数据库中最新数据时间开始爬取历史数据
     """
     print('开始爬取历史数据...')
     
@@ -544,10 +604,22 @@ def main():
     # 初始化数据库
     init_database()
     
-    # 从最新数据时间开始爬取历史数据
-    fetch_historical_data_from_latest()
+    print('\n请选择操作:')
+    print('1. 爬取历史数据')
+    print('2. 更新现有数据的贪婪恐惧指数')
     
-    print('\n历史数据爬取任务完成！')
+    # 获取用户输入
+    choice = input('请输入选择 (1/2): ')
+    
+    if choice == '1':
+        # 从最新数据时间开始爬取历史数据
+        fetch_historical_data_from_latest()
+        print('\n历史数据爬取任务完成！')
+    elif choice == '2':
+        # 更新现有数据的贪婪恐惧指数
+        update_fear_greed_indexes()
+    else:
+        print('无效的选择，请重新运行程序')
 
 
 if __name__ == '__main__':
