@@ -2,7 +2,7 @@
 import requests  # 用于发送HTTP请求
 import schedule  # 用于设置定时任务
 import time  # 用于时间控制
-from datetime import datetime  # 用于获取当前时间
+from datetime import datetime, timedelta  # 用于获取当前时间和时间差计算
 import pymysql  # 用于MySQL数据库操作
 
 # MySQL数据库配置
@@ -67,6 +67,16 @@ def init_database():
         """
         cursor.execute(create_price_table_sql)
         print("表 price_data 已创建或已存在")
+        
+        # 创建贪婪恐惧指数表（只包含日期和值字段）
+        create_fng_table_sql = """
+        CREATE TABLE IF NOT EXISTS fear_greed_index (
+            date DATE NOT NULL PRIMARY KEY,
+            value INT NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+        cursor.execute(create_fng_table_sql)
+        print("表 fear_greed_index 已创建或已存在")
         
         # 尝试创建索引（如果不存在）
         try:
@@ -154,28 +164,39 @@ def fetch_price(symbol):
     返回:
         dict: 包含货币符号、价格和时间戳的字典
     """
-    try:
-        # 发送GET请求到币安API获取价格
-        response = requests.get(f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT')
-        # 检查请求是否成功
-        response.raise_for_status()
-        # 解析JSON响应
-        data = response.json()
-        # 返回价格信息
-        return {
-            'symbol': symbol,
-            'price': float(data['price']),  # 将价格转换为浮点数
-            'timestamp': datetime.now().isoformat()  # 获取当前时间戳
-        }
-    except Exception as error:
-        # 处理异常情况
-        print(f'获取{symbol}价格失败:', str(error))
-        # 异常时返回空价格
-        return {
-            'symbol': symbol,
-            'price': None,
-            'timestamp': datetime.now().isoformat()
-        }
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            # 发送GET请求到币安API获取价格
+            response = requests.get(f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT')
+            # 检查请求是否成功
+            response.raise_for_status()
+            # 解析JSON响应
+            data = response.json()
+            # 返回价格信息
+            return {
+                'symbol': symbol,
+                'price': float(data['price']),  # 将价格转换为浮点数
+                'timestamp': datetime.now().isoformat()  # 获取当前时间戳
+            }
+        except Exception as error:
+            # 处理异常情况
+            print(f'获取{symbol}价格失败:', str(error))
+            retry_count += 1
+            
+            if retry_count < max_retries:
+                print(f'等待10秒后重新尝试...({retry_count}/{max_retries})')
+                time.sleep(10)
+            else:
+                print(f'已尝试{max_retries}次，获取{symbol}价格失败')
+                # 异常时返回空价格
+                return {
+                    'symbol': symbol,
+                    'price': None,
+                    'timestamp': datetime.now().isoformat()
+                }
 
 
 def fetch_historical_data(symbol, start_time, end_time):
@@ -201,14 +222,10 @@ def fetch_historical_data(symbol, start_time, end_time):
         request_count = 0
         total_processed = 0
         
+        # 初始化当前开始时间
+        current_start = start_ts
+        
         while True:
-            # 获取最新时间戳，确保每次都从数据库最新位置开始
-            latest_time = get_latest_timestamp(symbol)
-            if latest_time:
-                current_start = int(latest_time.timestamp() * 1000) + 1
-            else:
-                current_start = start_ts
-            
             if current_start >= end_ts:
                 print(f'{symbol} 数据已是最新，无需更新')
                 break
@@ -233,11 +250,23 @@ def fetch_historical_data(symbol, start_time, end_time):
             print(f'等待 {sleep_time:.2f} 秒后请求...')
             time.sleep(sleep_time)
             
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            
-            # 解析JSON响应
-            klines = response.json()
+            max_retries = 3
+            retry_count = 0
+            klines = []
+            while retry_count < max_retries:
+                try:
+                    response = requests.get(url, params=params)
+                    response.raise_for_status()
+                    klines = response.json()
+                    break
+                except Exception as error:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f'请求失败，10秒后重新尝试...({retry_count}/{max_retries})')
+                        time.sleep(10)
+                    else:
+                        print(f'已尝试{max_retries}次，请求仍然失败:', str(error))
+                        break
             
             if not klines:
                 print('没有更多数据，停止爬取')
@@ -247,11 +276,13 @@ def fetch_historical_data(symbol, start_time, end_time):
             batch_data = []
             for kline in klines:
                 timestamp = datetime.fromtimestamp(kline[0] / 1000)
+                open_price = float(kline[1])  # 开盘价
                 close_price = float(kline[4])  # 收盘价
+                avg_price = (open_price + close_price) / 2  # 开盘价和收盘价的均价
                 
                 batch_data.append({
                     'symbol': symbol,
-                    'price': close_price,
+                    'price': avg_price,
                     'timestamp': timestamp.isoformat()
                 })
             
@@ -260,6 +291,9 @@ def fetch_historical_data(symbol, start_time, end_time):
                 print(f'保存 {len(batch_data)} 条 {symbol} 数据...')
                 save_to_database(batch_data)
                 total_processed += len(batch_data)
+            
+            # 关键：更新当前开始时间为下一批数据的开始时间
+            current_start = current_end
             
             # 每3次请求增加更长的延迟
             request_count += 1
@@ -280,7 +314,7 @@ def fetch_historical_data(symbol, start_time, end_time):
 
 def fetch_prices():
     """
-    获取BTC和ETH的价格并保存到Excel
+    获取BTC和ETH的价格并保存到数据库
     """
     print('正在获取价格...')
     # 获取BTC价格
@@ -300,44 +334,108 @@ def fetch_prices():
 fear_greed_cache = {}
 
 
-# 全局变量：存储完整的历史贪婪恐惧指数数据
-fng_history_data = None
-
-
-def fetch_fng_history():
+def get_latest_fng_date():
     """
-    获取完整的贪婪恐惧指数历史数据
+    获取本地数据库中贪婪恐惧指数的最新日期
     """
-    global fng_history_data
-    
-    if fng_history_data is not None:
-        print('使用缓存的历史贪婪恐惧指数数据')
-        return fng_history_data
-    
     try:
-        print('获取完整的贪婪恐惧指数历史数据...')
-        url = 'https://api.alternative.me/fng/?limit=2000'
+        conn = get_db_connection()
+        if not conn:
+            return None
         
-        # 添加延迟避免API限制
+        cursor = conn.cursor()
+        
+        # 查询最新的日期
+        query = "SELECT MAX(date) FROM fear_greed_index"
+        cursor.execute(query)
+        result = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+        
+        if result and result[0]:
+            return result[0]
+        return None
+    except Exception as error:
+        print('获取最新贪婪恐惧指数日期失败:', str(error))
+        return None
+
+
+def fetch_fng_history(start_date=None):
+    """
+    获取贪婪恐惧指数历史数据
+    如果指定了start_date，则只获取该日期之后的数据
+    根据日期差动态计算需要获取的数据量
+    """
+    try:
+        if start_date:
+            print(f'获取从 {start_date} 开始的贪婪恐惧指数数据...')
+            # 计算从最新日期到当前日期的天数差
+            current_date = datetime.now().date()  # 转换为date类型
+            # 确保start_date也是date类型
+            if isinstance(start_date, datetime):
+                start_date = start_date.date()
+            date_diff = (current_date - start_date).days
+            # 计算需要获取的数据条数（加10天的缓冲）
+            required_limit = date_diff + 10
+            print(f'计算需要获取 {required_limit} 条数据...')
+        else:
+            print('获取完整的贪婪恐惧指数历史数据...')
+            required_limit = 3000  # 完整历史数据
+        
+        # 根据计算的limit参数构建URL
+        url = f'https://api.alternative.me/fng/?limit={required_limit}'
+        print(f'API请求URL: {url}')
+        
+        # 添加合理的延迟避免API限制
         time.sleep(3)
         
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
+        max_retries = 3
+        retry_count = 0
+        data = {'data': []}
+        while retry_count < max_retries:
+            try:
+                response = requests.get(url)
+                response.raise_for_status()
+                data = response.json()
+                break
+            except Exception as error:
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f'请求失败，10秒后重新尝试...({retry_count}/{max_retries})')
+                    time.sleep(10)
+                else:
+                    print(f'已尝试{max_retries}次，请求仍然失败:', str(error))
+                    break
         
         if data['data'] and len(data['data']) > 0:
-            # 转换数据格式，方便查找
+            # 转换数据格式，方便查找和处理
             history_dict = {}
             for item in data['data']:
                 item_date = datetime.fromtimestamp(int(item['timestamp'])).strftime('%Y-%m-%d')
-                history_dict[item_date] = int(item['value'])
+                
+                # 如果指定了起始日期，只保留该日期之后的数据
+                if start_date:
+                    if item_date > start_date.strftime('%Y-%m-%d'):
+                        history_dict[item_date] = int(item['value'])
+                else:
+                    history_dict[item_date] = int(item['value'])
             
-            fng_history_data = history_dict
-            print(f'成功获取 {len(history_dict)} 条历史贪婪恐惧指数数据')
-            return history_dict
+            if history_dict:
+                print(f'成功获取 {len(history_dict)} 条贪婪恐惧指数数据')
+                if start_date:
+                    print(f'数据时间范围: 从 {min(history_dict.keys())} 到 {max(history_dict.keys())}')
+                else:
+                    print(f'数据时间范围: 最早 {min(history_dict.keys())}, 最晚 {max(history_dict.keys())}')
+                return history_dict
+            else:
+                print('没有找到符合条件的贪婪恐惧指数数据')
+                return {}
         return {}
     except Exception as error:
         print('获取历史贪婪恐惧指数失败:', str(error))
+        import traceback
+        traceback.print_exc()
         return {}
 
 
@@ -388,9 +486,23 @@ def fetch_fear_greed_index(timestamp=None):
             # 添加延迟避免API限制
             time.sleep(1)
             
-            response = requests.get(url)
-            response.raise_for_status()
-            data = response.json()
+            max_retries = 3
+            retry_count = 0
+            data = {'data': []}
+            while retry_count < max_retries:
+                try:
+                    response = requests.get(url)
+                    response.raise_for_status()
+                    data = response.json()
+                    break
+                except Exception as error:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f'请求失败，10秒后重新尝试...({retry_count}/{max_retries})')
+                        time.sleep(10)
+                    else:
+                        print(f'已尝试{max_retries}次，请求仍然失败:', str(error))
+                        break
             
             if data['data'] and len(data['data']) > 0:
                 index_value = int(data['data'][0]['value'])
@@ -453,7 +565,7 @@ def save_fear_greed_index(date, value):
 
 def save_to_database(data):
     """
-    将价格数据保存到MySQL数据库
+    将价格数据保存到MySQL数据库，避免重复数据
     
     参数:
         data (list): 包含价格信息的字典列表
@@ -470,6 +582,7 @@ def save_to_database(data):
         insert_data = []
         batch_size = 100  # 每批次处理的记录数
         total_processed = 0
+        duplicate_count = 0
         
         for i, item in enumerate(data):
             # 解析时间戳
@@ -484,13 +597,20 @@ def save_to_database(data):
             
             currency_id = currency_result[0]
             
-            # 获取该时间点的贪婪恐惧指数
-            fear_greed_index = fetch_fear_greed_index(item['timestamp'])
+            # 检查该时间点的数据是否已存在
+            check_sql = """
+            SELECT COUNT(*) FROM price_data
+            WHERE symbol = %s AND timestamp = %s
+            """
+            cursor.execute(check_sql, (item['symbol'], timestamp))
+            exists = cursor.fetchone()[0]
             
-            # 如果获取到贪婪恐惧指数，保存到新表
-            if fear_greed_index is not None:
-                date_str = timestamp.strftime('%Y-%m-%d')
-                save_fear_greed_index(date_str, fear_greed_index)
+            if exists > 0:
+                duplicate_count += 1
+                # 每100条重复数据打印一次提示
+                if duplicate_count % 100 == 0:
+                    print(f"跳过 {duplicate_count} 条重复数据")
+                continue
             
             # 每100条打印一次进度
             if (i + 1) % batch_size == 0:
@@ -528,6 +648,8 @@ def save_to_database(data):
             conn.commit()
             print(f"已保存 {len(insert_data)} 条数据")
         
+        if duplicate_count > 0:
+            print(f"跳过 {duplicate_count} 条重复数据")
         print(f"成功保存 {total_processed} 条价格数据到数据库")
         
         # 关闭连接
@@ -648,8 +770,11 @@ def fetch_historical_data_from_latest():
                 next_minute = minutes - remainder + 5
                 if next_minute >= 60:
                     # 进位到下一个小时
-                    start_time = start_time.replace(minute=0)
-                    start_time = start_time.replace(hour=start_time.hour + 1)
+                    new_hour = (start_time.hour + 1) % 24
+                    start_time = start_time.replace(minute=0, hour=new_hour)
+                    # 如果小时从23变为0，需要进位到下一天
+                    if new_hour == 0:
+                        start_time += timedelta(days=1)
                 else:
                     start_time = start_time.replace(minute=next_minute)
             else:
@@ -657,44 +782,173 @@ def fetch_historical_data_from_latest():
                 next_minute = minutes + 5
                 if next_minute >= 60:
                     # 进位到下一个小时
-                    start_time = start_time.replace(minute=0)
-                    start_time = start_time.replace(hour=start_time.hour + 1)
+                    new_hour = (start_time.hour + 1) % 24
+                    start_time = start_time.replace(minute=0, hour=new_hour)
+                    # 如果小时从23变为0，需要进位到下一天
+                    if new_hour == 0:
+                        start_time += timedelta(days=1)
                 else:
                     start_time = start_time.replace(minute=next_minute)
-            
-            # 确保开始时间不超过结束时间
-            if start_time >= end_time:
-                print(f'{symbol} 数据已是最新，无需更新')
-                continue
-            
-            print(f'从 {start_time} 开始爬取 {symbol} 数据')
-        else:
-            # 如果没有数据，从2023年1月1日开始
-            start_time = datetime(2023, 1, 1, 0, 0, 0)
-            print(f'首次爬取 {symbol} 数据，从2023年1月1日开始')
+        
+        # 确保开始时间不超过结束时间
+        if start_time >= end_time:
+            print(f'{symbol} 数据已是最新，无需更新')
+            continue
+        
+        print(f'从 {start_time} 开始爬取 {symbol} 数据')
         
         # 爬取数据（现在函数内部会自动保存）
         fetch_historical_data(symbol, start_time, end_time)
+
+
+def fetch_data_2020_to_present():
+    """
+    获取2020年至今的完整历史数据
+    """
+    print('开始获取2020年至今的历史数据...')
     
-    print('\n历史数据爬取完成！')
+    # 定义要爬取的币种
+    symbols = ['BTC', 'ETH']
+    
+    for symbol in symbols:
+        print(f'\n===== 获取 {symbol} 2020年至今数据 =====')
+        
+        # 获取最新数据时间戳
+        latest_timestamp = get_latest_timestamp(symbol)
+        
+        if latest_timestamp:
+            # 如果有数据，从最新时间的下一个5分钟开始
+            start_time = latest_timestamp
+            # 调整到下一个5分钟整点
+            minutes = start_time.minute
+            remainder = minutes % 5
+            if remainder != 0:
+                # 计算到下一个5分钟
+                next_minute = minutes - remainder + 5
+                if next_minute >= 60:
+                    # 进位到下一个小时
+                    new_hour = (start_time.hour + 1) % 24
+                    start_time = start_time.replace(minute=0, hour=new_hour)
+                    # 如果小时从23变为0，需要进位到下一天
+                    if new_hour == 0:
+                        start_time += timedelta(days=1)
+                else:
+                    start_time = start_time.replace(minute=next_minute)
+            else:
+                # 当前已经是5分钟整点，跳到下一个
+                next_minute = minutes + 5
+                if next_minute >= 60:
+                    # 进位到下一个小时
+                    new_hour = (start_time.hour + 1) % 24
+                    start_time = start_time.replace(minute=0, hour=new_hour)
+                    # 如果小时从23变为0，需要进位到下一天
+                    if new_hour == 0:
+                        start_time += timedelta(days=1)
+                else:
+                    start_time = start_time.replace(minute=next_minute)
+        else:
+            # 如果没有数据，从2020年1月1日开始
+            start_time = datetime(2020, 1, 1, 0, 0, 0)
+        
+        # 结束时间为当前时间
+        end_time = datetime.now()
+        
+        # 确保开始时间不超过结束时间
+        if start_time < end_time:
+            print(f'时间范围: {start_time} 到 {end_time}')
+            # 爬取数据
+            fetch_historical_data(symbol, start_time, end_time)
+        else:
+            print(f'{symbol} 数据已是最新，无需更新')
+    
+    print('\n2020年至今历史数据获取完成！')
+
+
+def update_fng_data_2020_to_present():
+    """
+    更新2020年至今的恐惧贪婪指数数据
+    实现增量更新：只获取本地最新日期之后的数据
+    """
+    print('开始更新2020年至今的恐惧贪婪指数数据...')
+    
+    # 获取本地最新的贪婪恐惧指数日期
+    latest_fng_date = get_latest_fng_date()
+    
+    if latest_fng_date:
+        print(f'本地最新贪婪恐惧指数日期: {latest_fng_date}')
+        print('将只获取该日期之后的数据...')
+    else:
+        print('本地没有贪婪恐惧指数数据，将获取完整的历史数据...')
+    
+    # 获取历史数据（如果有最新日期，则只获取该日期之后的数据）
+    history_data = fetch_fng_history(latest_fng_date)
+    
+    if not history_data:
+        print('无法获取贪婪恐惧指数历史数据或数据已是最新')
+        return
+    
+    print(f'找到 {len(history_data)} 条恐惧贪婪指数数据')
+    
+    if history_data:
+        # 保存数据到数据库
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            
+            insert_count = 0
+            
+            # 按日期正序排序，确保id按时间顺序递增
+            sorted_dates = sorted(history_data.items(), key=lambda x: x[0])
+            
+            for date_str, value in sorted_dates:
+                try:
+                    # 只保存2020年至今的数据
+                    year = int(date_str.split('-')[0])
+                    if year >= 2020:
+                        insert_sql = """
+                        INSERT IGNORE INTO fear_greed_index (date, value)
+                        VALUES (%s, %s)
+                        """
+                        cursor.execute(insert_sql, (date_str, value))
+                        insert_count += 1
+                except Exception as e:
+                    print(f'保存 {date_str} 数据失败:', str(e))
+            
+            conn.commit()
+            print(f'成功保存 {insert_count} 条2020年至今的恐惧贪婪指数数据')
+            
+            cursor.close()
+            conn.close()
+    
+    print('\n2020年至今恐惧贪婪指数数据更新完成！')
 
 
 def main():
     """
-    主函数，启动加密货币价格分析工具
+    主函数，启动加密货币价格分析工具，获取2020年至今的完整数据
+    执行顺序：先获取完整的贪婪恐惧指数数据，再获取BTC和ETH的价格数据
+    这样可以避免id异常递增的问题
     """
     print('启动加密货币价格分析工具...')
     print('项目: Analysis of Cryptocurrency Price Trends')
     print('仓库: https://github.com/idealism-L')
     print('=============================================')
+    print('目标: 获取2020年至今的完整加密货币数据')
+    print('执行顺序: 1. 获取贪婪恐惧指数数据 2. 获取BTC/ETH价格数据')
+    print('=============================================')
     
     # 初始化数据库
     init_database()
     
-    # 从最新数据时间开始爬取历史数据
-    fetch_historical_data_from_latest()
+    # 1. 首先获取完整的贪婪恐惧指数数据
+    print('\n=== 步骤1: 获取完整的贪婪恐惧指数数据 ===')
+    update_fng_data_2020_to_present()
     
-    print('\n历史数据爬取任务完成！')
+    # 2. 然后获取BTC和ETH的价格数据
+    print('\n=== 步骤2: 获取BTC和ETH价格数据 ===')
+    fetch_data_2020_to_present()
+    
+    print('\n2020年至今数据获取和更新任务完成！')
 
 
 if __name__ == '__main__':

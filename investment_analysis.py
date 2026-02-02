@@ -1,7 +1,6 @@
 # 导入必要的库
 import pymysql
 from datetime import datetime, timedelta
-import json
 
 # MySQL数据库配置
 DB_CONFIG = {
@@ -13,8 +12,15 @@ DB_CONFIG = {
 }
 
 class InvestmentAnalyzer:
+    """
+    加密货币投资策略分析器
+    基于贪婪恐惧指数进行投资决策
+    """
     def __init__(self):
-        self.initial_funds = 10000  # 初始资金1wu
+        """
+        初始化投资分析器
+        """
+        self.initial_funds = 10000  # 初始资金
         self.current_funds = 10000  # 当前资金
         self.btc_holdings = 0  # 持有BTC数量
         self.trade_records = []  # 交易记录
@@ -39,6 +45,60 @@ class InvestmentAnalyzer:
         except Exception as error:
             print('数据库连接失败:', str(error))
             return None
+    
+    def fetch_and_store_price_data(self, symbol, start_date, end_date):
+        """
+        从外部API获取价格数据并存储到数据库
+        注意：此函数为框架，实际数据获取由main.py中的fetch_historical_data函数处理
+        """
+        print(f"正在获取 {symbol} 价格数据...")
+        # 实际数据获取由main.py中的fetch_historical_data函数处理
+        # 这里只返回True作为占位符
+        return True
+    
+    def fetch_and_store_fng_data(self, start_date, end_date):
+        """
+        从外部API获取贪婪恐惧指数数据并存储到数据库
+        注意：此函数为框架，实际数据获取由main.py中的update_fng_data_2020_to_present函数处理
+        """
+        print("正在获取贪婪恐惧指数数据...")
+        # 实际数据获取由main.py中的update_fng_data_2020_to_present函数处理
+        # 这里只返回True作为占位符
+        return True
+    
+    def update_data(self):
+        """
+        更新数据，从最新日期开始获取到当前日期的数据
+        """
+        print("正在更新数据...")
+        
+        # 获取最新时间戳
+        latest_price_timestamp = self.get_latest_timestamp('price_data', 'timestamp')
+        latest_fng_date = self.get_latest_timestamp('fear_greed_index', 'date')
+        
+        # 确定起始日期
+        if latest_price_timestamp:
+            price_start_date = latest_price_timestamp
+        else:
+            price_start_date = datetime(2020, 1, 1)
+        
+        if latest_fng_date:
+            fng_start_date = latest_fng_date
+        else:
+            fng_start_date = datetime(2020, 1, 1)
+        
+        # 结束日期为当前日期
+        end_date = datetime.now()
+        
+        # 获取价格数据
+        self.fetch_and_store_price_data('BTC', price_start_date, end_date)
+        self.fetch_and_store_price_data('ETH', price_start_date, end_date)
+        
+        # 获取贪婪恐惧指数数据
+        self.fetch_and_store_fng_data(fng_start_date, end_date)
+        
+        print("数据更新完成")
+        return True
     
     def create_trade_table(self):
         """
@@ -130,6 +190,31 @@ class InvestmentAnalyzer:
         except Exception as error:
             print('保存交易记录到数据库失败:', str(error))
     
+    def get_latest_timestamp(self, table, date_column):
+        """
+        获取数据库中指定表的最新时间戳
+        """
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                return None
+            
+            cursor = conn.cursor()
+            
+            query = f"SELECT MAX({date_column}) FROM {table}"
+            cursor.execute(query)
+            result = cursor.fetchone()
+            
+            cursor.close()
+            conn.close()
+            
+            if result and result[0]:
+                return result[0]
+            return None
+        except Exception as error:
+            print(f'获取最新时间戳失败: {str(error)}')
+            return None
+    
     def preload_data(self):
         """
         预加载所有需要的数据，减少数据库连接次数
@@ -148,7 +233,7 @@ class InvestmentAnalyzer:
             query = """
             SELECT DATE(timestamp) as date, AVG(price) as avg_price
             FROM price_data
-            WHERE symbol = 'BTC' AND DATE(timestamp) >= '2023-01-01'
+            WHERE symbol = 'BTC' AND DATE(timestamp) >= '2020-01-01'
             GROUP BY DATE(timestamp)
             """
             cursor.execute(query)
@@ -162,7 +247,7 @@ class InvestmentAnalyzer:
             query = """
             SELECT date, value as fear_greed_index
             FROM fear_greed_index
-            WHERE date >= '2023-01-01'
+            WHERE date >= '2020-01-01'
             ORDER BY date
             """
             cursor.execute(query)
@@ -347,17 +432,34 @@ class InvestmentAnalyzer:
         print(f"初始资金: ${self.initial_funds:.2f}")
         print("投资策略: 贪婪恐惧指数30以下买入100u，25以下买入200u，20以下买入300u")
         print("卖出策略: 70以上卖出2%，75以上卖出3%，80以上卖出5%")
-        print(f"时间范围: 2023年1月1日 - {datetime.now().strftime('%Y年%m月%d日')}")
+        
+        # 获取最新时间戳，决定起始日期
+        latest_price_timestamp = self.get_latest_timestamp('price_data', 'timestamp')
+        latest_fng_date = self.get_latest_timestamp('fear_greed_index', 'date')
+        
+        # 确定起始日期
+        if latest_price_timestamp:
+            start_date = latest_price_timestamp
+            print(f"从最新数据日期开始: {start_date.strftime('%Y年%m月%d日')}")
+        else:
+            start_date = datetime(2020, 1, 1)
+            print(f"从初始日期开始: {start_date.strftime('%Y年%m月%d日')}")
+        
+        end_date = datetime.now()
+        print(f"时间范围: {start_date.strftime('%Y年%m月%d日')} - {end_date.strftime('%Y年%m月%d日')}")
         print("=" * 90)
+        
+        # 更新数据
+        if not self.update_data():
+            print("数据更新失败，无法继续分析")
+            return
         
         # 预加载数据
         if not self.preload_data():
             print("数据预加载失败，无法继续分析")
             return
         
-        # 遍历2023年到现在的每一天
-        start_date = datetime(2023, 1, 1)
-        end_date = datetime.now()
+        # 遍历从起始日期到现在的每一天
         current_date = start_date
         
         while current_date <= end_date:
@@ -400,6 +502,8 @@ class InvestmentAnalyzer:
         # 分析结束，输出结果
         self.print_summary()
     
+
+    
     def print_summary(self):
         """
         输出投资总结
@@ -408,8 +512,16 @@ class InvestmentAnalyzer:
         print("        投资策略分析总结")
         print("=" * 90)
         
-        # 计算最终价值（以2025年12月31日价格估算）
-        final_price = self.get_daily_average_price('BTC', '2025-12-31')
+        # 计算最终价值（以当前价格估算）
+        latest_date = datetime.now().strftime('%Y-%m-%d')
+        final_price = self.get_daily_average_price('BTC', latest_date)
+        if not final_price:
+            # 如果没有当天价格，尝试获取最近的价格
+            if self.trade_records:
+                latest_trade = self.trade_records[-1]
+                final_price = latest_trade['price']
+                print(f"使用最近交易价格作为最终价格: ${final_price:.2f}")
+        
         if final_price:
             btc_value = self.btc_holdings * final_price
             total_value = self.current_funds + btc_value
@@ -425,7 +537,7 @@ class InvestmentAnalyzer:
             print(f"初始资金: ${self.initial_funds:.2f}")
             print(f"最终资金: ${self.current_funds:.2f}")
             print(f"最终持有BTC: {self.btc_holdings:.6f}")
-            print("无法计算总价值（缺少最终价格数据）")
+            print("无法计算总价值（缺少价格数据）")
         
         print(f"\n交易统计:")
         print(f"- 交易次数: {len(self.trade_records)}")
@@ -436,7 +548,6 @@ class InvestmentAnalyzer:
         if self.trade_records:
             print("\n交易记录:")
             # 使用固定宽度的格式字符串，确保精确对齐
-            # 列格式: 日期(12) 类型(8) 数量(12) 价格(12) 金额(12) 持有BTC(12) 剩余U(12) 总额U(12)
             format_str = "{:<12} {:<8} {:<12} {:<12} {:<12} {:<12} {:<12} {:<12}"
             
             # 打印表头
@@ -460,10 +571,6 @@ class InvestmentAnalyzer:
             # 打印底部分隔线
             print('=' * 95)
         
-        # 保存交易记录到文件
-        with open('trade_records.json', 'w', encoding='utf-8') as f:
-            json.dump(self.trade_records, f, indent=2, ensure_ascii=False)
-        print("\n交易记录已保存到 trade_records.json 文件")
         print("=" * 90)
 
 def main():
@@ -471,6 +578,9 @@ def main():
     主函数
     """
     analyzer = InvestmentAnalyzer()
+    
+    # 分析投资策略
+    print("分析投资策略...")
     analyzer.analyze_investment()
 
 if __name__ == '__main__':
