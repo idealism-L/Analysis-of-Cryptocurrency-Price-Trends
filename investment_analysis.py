@@ -23,11 +23,28 @@ class InvestmentAnalyzer:
         self.initial_funds = 10000  # 初始资金
         self.current_funds = 10000  # 当前资金
         self.btc_holdings = 0  # 持有BTC数量
+        self.eth_holdings = 0  # 持有ETH数量
+        self.btc_average_price = 0  # BTC持有均价
+        self.eth_average_price = 0  # ETH持有均价
         self.trade_records = []  # 交易记录
         self.last_buy_date = None  # 上次买入日期
         self.last_sell_date = None  # 上次卖出日期
+        
+        # 投资策略参数（集中管理，方便调整）
+        self.investment_strategy = {
+            'buy_thresholds': [
+                {'fng': 15, 'btc': 300, 'eth': 200},  # 15以下买入300u BTC和200u ETH
+                {'fng': 20, 'btc': 200, 'eth': 100},  # 20以下买入200u BTC和100u ETH
+                {'fng': 25, 'btc': 100, 'eth': 50}   # 25以下买入100u BTC和50u ETH
+            ],
+            'sell_thresholds': [
+                {'fng': 90, 'btc': 0.05, 'eth': 0.10},  # 90以上卖出BTC 5%和ETH 10%
+                {'fng': 85, 'btc': 0.02, 'eth': 0.05},  # 85以上卖出BTC 2%和ETH 5%
+                {'fng': 75, 'btc': 0.01, 'eth': 0.02}   # 75以上卖出BTC 1%和ETH 2%
+            ]
+        }
+        
         self.create_trade_table()  # 创建交易记录表
-        self.clear_trade_table()  # 清空交易记录表
     
     def get_db_connection(self):
         """
@@ -103,6 +120,7 @@ class InvestmentAnalyzer:
     def create_trade_table(self):
         """
         创建交易记录表
+        存在则删除再创建
         """
         try:
             conn = self.get_db_connection()
@@ -111,24 +129,36 @@ class InvestmentAnalyzer:
             
             cursor = conn.cursor()
             
+            # 删除已存在的表
+            cursor.execute("DROP TABLE IF EXISTS trade_records")
+            
             # 创建交易记录表
             create_table_sql = """
-            CREATE TABLE IF NOT EXISTS trade_records (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                date DATE NOT NULL,
-                type VARCHAR(10) NOT NULL,
-                amount DECIMAL(20, 8) NOT NULL,
-                price DECIMAL(20, 2) NOT NULL,
-                total_usd DECIMAL(20, 2) NOT NULL,
-                btc_holdings DECIMAL(20, 8) NOT NULL,
-                remaining_usd DECIMAL(20, 2) NOT NULL,
-                account_total DECIMAL(20, 2) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE trade_records (
+                id INT AUTO_INCREMENT PRIMARY KEY COMMENT '交易记录ID',
+                trade_date DATE NOT NULL COMMENT '交易日期',
+                trade_type VARCHAR(10) NOT NULL COMMENT '交易类型：buy或sell',
+                btc_trade_amount DECIMAL(20, 8) NOT NULL COMMENT 'BTC交易数量',
+                btc_trade_value DECIMAL(20, 2) NOT NULL COMMENT 'BTC交易金额',
+                btc_trade_price DECIMAL(20, 2) NOT NULL COMMENT 'BTC交易时价格',
+                eth_trade_amount DECIMAL(20, 8) NOT NULL COMMENT 'ETH交易数量',
+                eth_trade_value DECIMAL(20, 2) NOT NULL COMMENT 'ETH交易金额',
+                eth_trade_price DECIMAL(20, 2) NOT NULL COMMENT 'ETH交易时价格',
+                total_trade_value DECIMAL(20, 2) NOT NULL COMMENT '交易总金额',
+                btc_holdings DECIMAL(20, 8) NOT NULL COMMENT 'BTC持仓数量',
+                eth_holdings DECIMAL(20, 8) NOT NULL COMMENT 'ETH持仓数量',
+                btc_average_price DECIMAL(20, 2) NOT NULL COMMENT 'BTC持仓均价',
+                eth_average_price DECIMAL(20, 2) NOT NULL COMMENT 'ETH持仓均价',
+                remaining_usd DECIMAL(20, 2) NOT NULL COMMENT '剩余资金（USD）',
+                account_total DECIMAL(20, 2) NOT NULL COMMENT '账户总价值',
+                trade_note TEXT NOT NULL COMMENT '交易备注',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间'
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='交易记录表';
             """
+            
             cursor.execute(create_table_sql)
             conn.commit()
-            print("交易记录表已创建或已存在")
+            print("交易记录表已重新创建")
             
             cursor.close()
             conn.close()
@@ -170,18 +200,29 @@ class InvestmentAnalyzer:
             # 插入交易记录
             insert_sql = """
             INSERT INTO trade_records (
-                date, type, amount, price, total_usd, btc_holdings, remaining_usd, account_total
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                trade_date, trade_type, btc_trade_amount, btc_trade_value, btc_trade_price, 
+                eth_trade_amount, eth_trade_value, eth_trade_price, total_trade_value, 
+                btc_holdings, eth_holdings, btc_average_price, eth_average_price, 
+                remaining_usd, account_total, trade_note
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             cursor.execute(insert_sql, (
-                trade_record['date'],
-                trade_record['type'],
-                trade_record['amount'],
-                trade_record['price'],
-                trade_record['total_usd'],
+                trade_record['trade_date'],
+                trade_record['trade_type'],
+                trade_record.get('btc_trade_amount', 0),
+                trade_record.get('btc_trade_value', 0),
+                trade_record.get('btc_trade_price', 0),
+                trade_record.get('eth_trade_amount', 0),
+                trade_record.get('eth_trade_value', 0),
+                trade_record.get('eth_trade_price', 0),
+                trade_record['total_trade_value'],
                 trade_record['btc_holdings'],
+                trade_record.get('eth_holdings', self.eth_holdings),
+                trade_record.get('btc_average_price', 0),
+                trade_record.get('eth_average_price', 0),
                 trade_record['remaining_usd'],
-                trade_record['account_total']
+                trade_record['account_total'],
+                trade_record.get('trade_note', '')
             ))
             conn.commit()
             
@@ -228,8 +269,10 @@ class InvestmentAnalyzer:
             
             cursor = conn.cursor()
             
+            # 预加载BTC和ETH的日均价
+            self.daily_prices = {'BTC': {}, 'ETH': {}}
+            
             # 预加载BTC的日均价
-            self.daily_prices = {}
             query = """
             SELECT DATE(timestamp) as date, AVG(price) as avg_price
             FROM price_data
@@ -240,7 +283,20 @@ class InvestmentAnalyzer:
             for row in cursor.fetchall():
                 # 确保日期是字符串格式
                 date_str = row[0].strftime('%Y-%m-%d') if hasattr(row[0], 'strftime') else str(row[0])
-                self.daily_prices[date_str] = float(row[1])
+                self.daily_prices['BTC'][date_str] = float(row[1])
+            
+            # 预加载ETH的日均价
+            query = """
+            SELECT DATE(timestamp) as date, AVG(price) as avg_price
+            FROM price_data
+            WHERE symbol = 'ETH' AND DATE(timestamp) >= '2020-01-01'
+            GROUP BY DATE(timestamp)
+            """
+            cursor.execute(query)
+            for row in cursor.fetchall():
+                # 确保日期是字符串格式
+                date_str = row[0].strftime('%Y-%m-%d') if hasattr(row[0], 'strftime') else str(row[0])
+                self.daily_prices['ETH'][date_str] = float(row[1])
             
             # 预加载贪婪恐惧指数
             self.daily_fng = {}
@@ -289,14 +345,14 @@ class InvestmentAnalyzer:
         """
         获取指定日期的日均价
         """
-        if hasattr(self, 'daily_prices'):
+        if hasattr(self, 'daily_prices') and symbol in self.daily_prices:
             # 尝试直接匹配
-            if date in self.daily_prices:
-                return self.daily_prices[date]
+            if date in self.daily_prices[symbol]:
+                return self.daily_prices[symbol][date]
             # 尝试不同格式的日期匹配
-            for stored_date in self.daily_prices:
+            for stored_date in self.daily_prices[symbol]:
                 if str(stored_date) == date:
-                    return self.daily_prices[stored_date]
+                    return self.daily_prices[symbol][stored_date]
         return None
     
     def get_daily_fear_greed_index(self, date):
@@ -316,36 +372,53 @@ class InvestmentAnalyzer:
     def calculate_investment_amount(self, fng):
         """
         根据贪婪恐惧指数计算投资金额
+        返回(BTC投资金额, ETH投资金额)的元组
         """
-        if fng < 20:
-            return 300  # 20以下买入300u
+        if fng < 15:
+            return (300, 200)  # 15以下买入300u BTC和200u ETH
+        elif fng < 20:
+            return (200, 100)  # 20以下买入200u BTC和100u ETH
         elif fng < 25:
-            return 200  # 25以下买入200u
-        elif fng < 30:
-            return 100  # 30以下买入100u
+            return (100, 50)   # 25以下买入100u BTC和50u ETH
         else:
-            return 0  # 30以上不买入
+            return (0, 0)       # 25以上不买入
     
     def buy_btc(self, date, price, fng):
         """
         买入BTC
         """
-        investment_amount = self.calculate_investment_amount(fng)
+        btc_investment, eth_investment = self.calculate_investment_amount(fng)
         
-        # 检查资金是否足够
-        if self.current_funds < investment_amount:
-            print(f"{date}: 资金不足，无法买入 {investment_amount} 美元的BTC")
+        # 检查资金是否足够购买BTC
+        if self.current_funds < btc_investment:
+            print(f"{date}: 资金不足，无法买入 {btc_investment} 美元的BTC")
             return False
         
         # 计算可购买的BTC数量
-        btc_amount = investment_amount / price
+        btc_amount = btc_investment / price
         
         # 更新持仓和资金
         self.btc_holdings += btc_amount
-        self.current_funds -= investment_amount
+        self.current_funds -= btc_investment
+        
+        # 更新BTC持有均价（使用正确的加权平均计算方法）
+        if self.btc_holdings > 0:
+            # 持仓均价 = （买入前的持仓均价 * 当前数量 + 此次买入价值）/ 买入后总数量
+            new_btc_average_price = (self.btc_average_price * (self.btc_holdings - btc_amount) + btc_investment) / self.btc_holdings
+            self.btc_average_price = new_btc_average_price
+        else:
+            self.btc_average_price = 0
+        
+        # 获取ETH价格
+        eth_price = self.get_daily_average_price('ETH', date)
+        if not eth_price:
+            eth_price = price  # 如果没有ETH价格，使用BTC价格作为备选
         
         # 计算账户总额
-        account_total = self.current_funds + (self.btc_holdings * price)
+        account_total = self.current_funds + (self.btc_holdings * price) + (self.eth_holdings * eth_price)
+        
+        # 生成交易备注
+        note = f"交易类型: buy | 购买类型: BTC | 购买数量: {btc_amount:.6f} | 当前持仓: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f} | 总价值: ${account_total:.2f}"
         
         # 记录交易
         trade_record = {
@@ -353,18 +426,169 @@ class InvestmentAnalyzer:
             'type': 'buy',
             'price': price,
             'amount': btc_amount,
-            'total_usd': investment_amount,
+            'total_usd': btc_investment,
             'btc_holdings': self.btc_holdings,
+            'eth_holdings': self.eth_holdings,
+            'btc_average_price': self.btc_average_price,
+            'eth_average_price': self.eth_average_price,
             'remaining_usd': self.current_funds,
-            'account_total': account_total
+            'account_total': account_total,
+            'note': note
         }
         self.trade_records.append(trade_record)
         
         # 保存到数据库
         self.save_trade_to_database(trade_record)
         
-        print(f"{date}: 买入 {btc_amount:.6f} BTC, 价格: ${price:.2f}, 花费: ${investment_amount:.2f}")
+        print(f"{date}: 买入 {btc_amount:.6f} BTC, 价格: ${price:.2f}, 花费: ${btc_investment:.2f}")
         print(f"  当前持有: {self.btc_holdings:.6f} BTC, 剩余资金: ${self.current_funds:.2f}")
+        print(f"  账户总额: ${account_total:.2f}")
+        
+        self.last_buy_date = date
+        return True
+    
+    def buy_eth(self, date, price, fng):
+        """
+        买入ETH
+        """
+        btc_investment, eth_investment = self.calculate_investment_amount(fng)
+        
+        # 检查资金是否足够购买ETH
+        if self.current_funds < eth_investment:
+            print(f"{date}: 资金不足，无法买入 {eth_investment} 美元的ETH")
+            return False
+        
+        # 计算可购买的ETH数量
+        eth_amount = eth_investment / price
+        
+        # 更新持仓和资金
+        self.eth_holdings += eth_amount
+        self.current_funds -= eth_investment
+        
+        # 更新ETH持有均价（使用正确的加权平均计算方法）
+        if self.eth_holdings > 0:
+            # 持仓均价 = （买入前的持仓均价 * 当前数量 + 此次买入价值）/ 买入后总数量
+            new_eth_average_price = (self.eth_average_price * (self.eth_holdings - eth_amount) + eth_investment) / self.eth_holdings
+            self.eth_average_price = new_eth_average_price
+        else:
+            self.eth_average_price = 0
+        
+        # 获取BTC价格
+        btc_price = self.get_daily_average_price('BTC', date)
+        if not btc_price:
+            btc_price = price  # 如果没有BTC价格，使用ETH价格作为备选
+        
+        # 计算账户总额
+        account_total = self.current_funds + (self.btc_holdings * btc_price) + (self.eth_holdings * price)
+        
+        # 生成交易备注
+        note = f"交易类型: buy | 购买类型: ETH | 购买数量: {eth_amount:.6f} | 当前持仓: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f} | 总价值: ${account_total:.2f}"
+        
+        # 记录交易
+        trade_record = {
+            'date': date,
+            'type': 'buy',
+            'price': price,
+            'amount': eth_amount,
+            'total_usd': eth_investment,
+            'btc_holdings': self.btc_holdings,
+            'eth_holdings': self.eth_holdings,
+            'btc_average_price': self.btc_average_price,
+            'eth_average_price': self.eth_average_price,
+            'remaining_usd': self.current_funds,
+            'account_total': account_total,
+            'note': note
+        }
+        self.trade_records.append(trade_record)
+        
+        # 保存到数据库
+        self.save_trade_to_database(trade_record)
+        
+        print(f"{date}: 买入 {eth_amount:.6f} ETH, 价格: ${price:.2f}, 花费: ${eth_investment:.2f}")
+        print(f"  当前持有: {self.eth_holdings:.6f} ETH, 剩余资金: ${self.current_funds:.2f}")
+        print(f"  账户总额: ${account_total:.2f}")
+        
+        return True
+    
+    def buy_crypto(self, date, btc_price, eth_price, fng):
+        """
+        合并买入BTC和ETH
+        """
+        btc_investment, eth_investment = self.calculate_investment_amount(fng)
+        
+        # 检查资金是否足够购买BTC
+        if self.current_funds < btc_investment:
+            print(f"{date}: 资金不足，无法买入 {btc_investment} 美元的BTC")
+            return False
+        
+        # 计算可购买的BTC数量
+        btc_amount = btc_investment / btc_price
+        
+        # 更新BTC持仓和资金
+        self.btc_holdings += btc_amount
+        self.current_funds -= btc_investment
+        
+        # 更新BTC持有均价（使用正确的加权平均计算方法）
+        if self.btc_holdings > 0:
+            # 持仓均价 = （买入前的持仓均价 * 当前数量 + 此次买入价值）/ 买入后总数量
+            new_btc_average_price = (self.btc_average_price * (self.btc_holdings - btc_amount) + btc_investment) / self.btc_holdings
+            self.btc_average_price = new_btc_average_price
+        else:
+            self.btc_average_price = 0
+        
+        # 检查资金是否足够购买ETH
+        if self.current_funds < eth_investment:
+            print(f"{date}: 资金不足，无法买入 {eth_investment} 美元的ETH")
+            return False
+        
+        # 计算可购买的ETH数量
+        eth_amount = eth_investment / eth_price
+        
+        # 更新ETH持仓和资金
+        self.eth_holdings += eth_amount
+        self.current_funds -= eth_investment
+        
+        # 更新ETH持有均价（使用正确的加权平均计算方法）
+        if self.eth_holdings > 0:
+            # 持仓均价 = （买入前的持仓均价 * 当前数量 + 此次买入价值）/ 买入后总数量
+            new_eth_average_price = (self.eth_average_price * (self.eth_holdings - eth_amount) + eth_investment) / self.eth_holdings
+            self.eth_average_price = new_eth_average_price
+        else:
+            self.eth_average_price = 0
+        
+        # 计算账户总额
+        account_total = self.current_funds + (self.btc_holdings * btc_price) + (self.eth_holdings * eth_price)
+        
+        # 生成交易备注，包含贪恐指数
+        trade_note = f"当日贪恐指数: {fng} - 交易类型: buy - 以${btc_price:.2f}价格买入{btc_amount:.6f}BTC - 以${eth_price:.2f}价格买入{eth_amount:.6f}ETH"
+        
+        # 记录交易
+        trade_record = {
+            'trade_date': date,
+            'trade_type': 'buy',
+            'btc_trade_amount': btc_amount,  # BTC购买数量
+            'btc_trade_value': btc_investment,  # BTC交易金额
+            'btc_trade_price': btc_price,  # BTC交易时价格
+            'eth_trade_amount': eth_amount,  # ETH购买数量
+            'eth_trade_value': eth_investment,  # ETH交易金额
+            'eth_trade_price': eth_price,  # ETH交易时价格
+            'total_trade_value': btc_investment + eth_investment,  # 总交易金额
+            'btc_holdings': self.btc_holdings,
+            'eth_holdings': self.eth_holdings,
+            'btc_average_price': self.btc_average_price,
+            'eth_average_price': self.eth_average_price,
+            'remaining_usd': self.current_funds,
+            'account_total': account_total,
+            'trade_note': trade_note
+        }
+        self.trade_records.append(trade_record)
+        
+        # 保存到数据库
+        self.save_trade_to_database(trade_record)
+        
+        print(f"{date}: 买入 {btc_amount:.6f} BTC, 价格: ${btc_price:.2f}, 花费: ${btc_investment:.2f}")
+        print(f"{date}: 买入 {eth_amount:.6f} ETH, 价格: ${eth_price:.2f}, 花费: ${eth_investment:.2f}")
+        print(f"  当前持有: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f}, 剩余资金: ${self.current_funds:.2f}")
         print(f"  账户总额: ${account_total:.2f}")
         
         self.last_buy_date = date
@@ -379,14 +603,14 @@ class InvestmentAnalyzer:
             return False
         
         # 根据贪婪恐惧指数确定卖出比例
-        if fng >= 80:
-            sell_percentage = 0.05  # 80以上卖出5%
+        if fng >= 90:
+            sell_percentage = 0.05  # 90以上卖出5%
+        elif fng >= 85:
+            sell_percentage = 0.02  # 85以上卖出2%
         elif fng >= 75:
-            sell_percentage = 0.03  # 75以上卖出3%
-        elif fng >= 70:
-            sell_percentage = 0.02  # 70以上卖出2%
+            sell_percentage = 0.01  # 75以上卖出1%
         else:
-            return False  # 70以下不卖出
+            return False  # 75以下不卖出
         
         # 计算卖出数量
         sell_amount = self.btc_holdings * sell_percentage
@@ -396,19 +620,37 @@ class InvestmentAnalyzer:
         self.btc_holdings -= sell_amount
         self.current_funds += sell_value
         
+        # 卖出不影响总投资金额和均价，因为均价是基于买入成本计算的
+        # 只需要更新持仓数量，总投资金额保持不变
+        # 因此均价也保持不变，无需重新计算
+        
+        # 获取ETH价格
+        eth_price = self.get_daily_average_price('ETH', date)
+        if not eth_price:
+            eth_price = price  # 如果没有ETH价格，使用BTC价格作为备选
+        
         # 计算账户总额
-        account_total = self.current_funds + (self.btc_holdings * price)
+        account_total = self.current_funds + (self.btc_holdings * price) + (self.eth_holdings * eth_price)
+        
+        # 生成交易备注
+        note = f"交易类型: sell | 出售类型: BTC | 出售数量: {sell_amount:.6f} | 当前持仓: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f} | 总价值: ${account_total:.2f}"
         
         # 记录交易
         trade_record = {
             'date': date,
             'type': 'sell',
-            'price': price,
-            'amount': sell_amount,
+            'btc_price': price,
+            'eth_price': eth_price,
+            'btc_amount': sell_amount,  # BTC卖出数量
+            'eth_amount': 0,  # ETH卖出数量
             'total_usd': sell_value,
             'btc_holdings': self.btc_holdings,
+            'eth_holdings': self.eth_holdings,
+            'btc_average_price': self.btc_average_price,
+            'eth_average_price': self.eth_average_price,
             'remaining_usd': self.current_funds,
-            'account_total': account_total
+            'account_total': account_total,
+            'note': note
         }
         self.trade_records.append(trade_record)
         
@@ -422,6 +664,166 @@ class InvestmentAnalyzer:
         self.last_sell_date = date
         return True
     
+    def sell_eth(self, date, price, fng):
+        """
+        卖出ETH
+        """
+        if self.eth_holdings <= 0:
+            print(f"{date}: 没有ETH可卖")
+            return False
+        
+        # 根据贪婪恐惧指数确定卖出比例
+        if fng >= 90:
+            sell_percentage = 0.10  # 90以上卖出10%
+        elif fng >= 85:
+            sell_percentage = 0.05  # 85以上卖出5%
+        elif fng >= 75:
+            sell_percentage = 0.02  # 75以上卖出2%
+        else:
+            return False  # 75以下不卖出
+        
+        # 计算卖出数量
+        sell_amount = self.eth_holdings * sell_percentage
+        sell_value = sell_amount * price
+        
+        # 更新持仓和资金
+        self.eth_holdings -= sell_amount
+        self.current_funds += sell_value
+        
+        # 卖出不影响总投资金额和均价，因为均价是基于买入成本计算的
+        # 只需要更新持仓数量，总投资金额保持不变
+        # 因此均价也保持不变，无需重新计算
+        
+        # 获取BTC价格
+        btc_price = self.get_daily_average_price('BTC', date)
+        if not btc_price:
+            btc_price = price  # 如果没有BTC价格，使用ETH价格作为备选
+        
+        # 计算账户总额
+        account_total = self.current_funds + (self.btc_holdings * btc_price) + (self.eth_holdings * price)
+        
+        # 生成交易备注
+        note = f"交易类型: sell | 出售类型: ETH | 出售数量: {sell_amount:.6f} | 当前持仓: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f} | 总价值: ${account_total:.2f}"
+        
+        # 记录交易
+        trade_record = {
+            'date': date,
+            'type': 'sell',
+            'btc_price': btc_price,
+            'eth_price': price,
+            'btc_amount': 0,  # BTC卖出数量
+            'eth_amount': sell_amount,  # ETH卖出数量
+            'total_usd': sell_value,
+            'btc_holdings': self.btc_holdings,
+            'eth_holdings': self.eth_holdings,
+            'btc_average_price': self.btc_average_price,
+            'eth_average_price': self.eth_average_price,
+            'remaining_usd': self.current_funds,
+            'account_total': account_total,
+            'note': note
+        }
+        self.trade_records.append(trade_record)
+        
+        # 保存到数据库
+        self.save_trade_to_database(trade_record)
+        
+        print(f"{date}: 卖出 {sell_amount:.6f} ETH, 价格: ${price:.2f}, 获得: ${sell_value:.2f}")
+        print(f"  当前持有: {self.eth_holdings:.6f} ETH, 剩余资金: ${self.current_funds:.2f}")
+        print(f"  账户总额: ${account_total:.2f}")
+        
+        return True
+    
+    def sell_crypto(self, date, btc_price, eth_price, fng):
+        """
+        合并卖出BTC和ETH
+        """
+        # 检查是否有BTC可卖
+        if self.btc_holdings <= 0 and self.eth_holdings <= 0:
+            print(f"{date}: 没有加密货币可卖")
+            return False
+        
+        # 根据贪婪恐惧指数确定卖出比例
+        if fng >= 90:
+            btc_sell_percentage = 0.05  # 90以上卖出BTC 5%
+            eth_sell_percentage = 0.10  # 90以上卖出ETH 10%
+        elif fng >= 85:
+            btc_sell_percentage = 0.02  # 85以上卖出BTC 2%
+            eth_sell_percentage = 0.05  # 85以上卖出ETH 5%
+        elif fng >= 75:
+            btc_sell_percentage = 0.01  # 75以上卖出BTC 1%
+            eth_sell_percentage = 0.02  # 75以上卖出ETH 2%
+        else:
+            return False  # 75以下不卖出
+        
+        # 计算BTC卖出数量和价值
+        if self.btc_holdings > 0:
+            btc_sell_amount = self.btc_holdings * btc_sell_percentage
+            btc_sell_value = btc_sell_amount * btc_price
+            
+            # 更新BTC持仓和资金
+            self.btc_holdings -= btc_sell_amount
+            self.current_funds += btc_sell_value
+        else:
+            btc_sell_amount = 0
+            btc_sell_value = 0
+        
+        # 计算ETH卖出数量和价值
+        if self.eth_holdings > 0:
+            eth_sell_amount = self.eth_holdings * eth_sell_percentage
+            eth_sell_value = eth_sell_amount * eth_price
+            
+            # 更新ETH持仓和资金
+            self.eth_holdings -= eth_sell_amount
+            self.current_funds += eth_sell_value
+        else:
+            eth_sell_amount = 0
+            eth_sell_value = 0
+        
+        # 计算总卖出价值
+        total_sell_value = btc_sell_value + eth_sell_value
+        
+        # 计算账户总额
+        account_total = self.current_funds + (self.btc_holdings * btc_price) + (self.eth_holdings * eth_price)
+        
+        # 生成交易备注
+        trade_note = f"当日贪恐指数: {fng} - 交易类型: sell - 以${btc_price:.2f}价格卖出{btc_sell_amount:.6f}BTC - 以${eth_price:.2f}价格卖出{eth_sell_amount:.6f}ETH"
+        
+        # 记录交易
+        trade_record = {
+            'trade_date': date,
+            'trade_type': 'sell',
+            'btc_trade_amount': btc_sell_amount,  # BTC卖出数量
+            'btc_trade_value': btc_sell_value,  # BTC交易金额
+            'btc_trade_price': btc_price,  # BTC交易时价格
+            'eth_trade_amount': eth_sell_amount,  # ETH卖出数量
+            'eth_trade_value': eth_sell_value,  # ETH交易金额
+            'eth_trade_price': eth_price,  # ETH交易时价格
+            'total_trade_value': total_sell_value,  # 总交易金额
+            'btc_holdings': self.btc_holdings,
+            'eth_holdings': self.eth_holdings,
+            'btc_average_price': self.btc_average_price,
+            'eth_average_price': self.eth_average_price,
+            'remaining_usd': self.current_funds,
+            'account_total': account_total,
+            'trade_note': trade_note
+        }
+        self.trade_records.append(trade_record)
+        
+        # 保存到数据库
+        self.save_trade_to_database(trade_record)
+        
+        # 打印交易信息
+        if btc_sell_amount > 0:
+            print(f"{date}: 卖出 {btc_sell_amount:.6f} BTC, 价格: ${btc_price:.2f}, 获得: ${btc_sell_value:.2f}")
+        if eth_sell_amount > 0:
+            print(f"{date}: 卖出 {eth_sell_amount:.6f} ETH, 价格: ${eth_price:.2f}, 获得: ${eth_sell_value:.2f}")
+        if btc_sell_amount > 0 or eth_sell_amount > 0:
+            print(f"  当前持有: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f}, 剩余资金: ${self.current_funds:.2f}")
+            print(f"  账户总额: ${account_total:.2f}")
+        
+        self.last_sell_date = date
+        return True
+    
     def analyze_investment(self):
         """
         分析投资策略
@@ -430,20 +832,26 @@ class InvestmentAnalyzer:
         print("        加密货币投资策略分析")
         print("=" * 90)
         print(f"初始资金: ${self.initial_funds:.2f}")
-        print("投资策略: 贪婪恐惧指数30以下买入100u，25以下买入200u，20以下买入300u")
-        print("卖出策略: 70以上卖出2%，75以上卖出3%，80以上卖出5%")
         
-        # 获取最新时间戳，决定起始日期
-        latest_price_timestamp = self.get_latest_timestamp('price_data', 'timestamp')
-        latest_fng_date = self.get_latest_timestamp('fear_greed_index', 'date')
+        # 动态生成投资策略描述
+        buy_strategy_lines = []
+        for threshold in sorted(self.investment_strategy['buy_thresholds'], key=lambda x: x['fng']):
+            buy_strategy_lines.append(f"{threshold['fng']}以下买入{threshold['btc']}u BTC和{threshold['eth']}u ETH")
+        buy_strategy = "，".join(buy_strategy_lines)
+        print(f"投资策略: 贪婪恐惧指数{buy_strategy}")
         
-        # 确定起始日期
-        if latest_price_timestamp:
-            start_date = latest_price_timestamp
-            print(f"从最新数据日期开始: {start_date.strftime('%Y年%m月%d日')}")
-        else:
-            start_date = datetime(2020, 1, 1)
-            print(f"从初始日期开始: {start_date.strftime('%Y年%m月%d日')}")
+        # 动态生成卖出策略描述
+        sell_strategy_lines = []
+        for threshold in sorted(self.investment_strategy['sell_thresholds'], key=lambda x: x['fng']):
+            btc_percent = threshold['btc'] * 100
+            eth_percent = threshold['eth'] * 100
+            sell_strategy_lines.append(f"{threshold['fng']}以上卖出BTC {btc_percent:.0f}%和ETH {eth_percent:.0f}%")
+        sell_strategy = "，".join(sell_strategy_lines)
+        print(f"卖出策略: 贪婪恐惧指数{sell_strategy}")
+        
+        # 强制从2020年开始分析，以获取完整的历史数据
+        start_date = datetime(2020, 1, 1)
+        print(f"从初始日期开始: {start_date.strftime('%Y年%m月%d日')}")
         
         end_date = datetime.now()
         print(f"时间范围: {start_date.strftime('%Y年%m月%d日')} - {end_date.strftime('%Y年%m月%d日')}")
@@ -471,31 +879,41 @@ class InvestmentAnalyzer:
                 current_date += timedelta(days=1)
                 continue
             
-            # 获取当日均价
-            avg_price = self.get_daily_average_price('BTC', date_str)
-            if avg_price is None:
+            # 获取当日BTC均价
+            btc_price = self.get_daily_average_price('BTC', date_str)
+            if btc_price is None:
+                current_date += timedelta(days=1)
+                continue
+            
+            # 获取当日ETH均价
+            eth_price = self.get_daily_average_price('ETH', date_str)
+            if eth_price is None:
                 current_date += timedelta(days=1)
                 continue
             
             # 检查是否需要操作
-            if fng is not None and avg_price is not None:
-                if fng < 30:
-                    # 贪婪恐惧指数30以下，买入
+            if fng is not None and btc_price is not None and eth_price is not None:
+                if fng < 25:
+                    # 贪婪恐惧指数25以下，买入
                     if self.last_buy_date != date_str:
-                        print(f"\n{date_str}: 贪婪恐惧指数={fng}, 均价=${avg_price:.2f}")
-                        self.buy_btc(date_str, avg_price, fng)
-                elif fng >= 70:
-                    # 贪婪恐惧指数70以上，根据不同区间卖出不同比例
+                        print(f"\n{date_str}: 贪婪恐惧指数={fng}, BTC均价=${btc_price:.2f}, ETH均价=${eth_price:.2f}")
+                        # 合并买入BTC和ETH
+                        self.buy_crypto(date_str, btc_price, eth_price, fng)
+                elif fng >= 75:
+                    # 贪婪恐惧指数75以上，根据不同区间卖出不同比例
                     if self.last_sell_date != date_str:
-                        print(f"\n{date_str}: 贪婪恐惧指数={fng}, 均价=${avg_price:.2f}")
-                        self.sell_btc(date_str, avg_price, fng)
-                # 30-70区间，不操作，不输出
+                        print(f"\n{date_str}: 贪婪恐惧指数={fng}, BTC均价=${btc_price:.2f}, ETH均价=${eth_price:.2f}")
+                        # 合并卖出BTC和ETH
+                        self.sell_crypto(date_str, btc_price, eth_price, fng)
+                # 25-75区间，不操作，不输出
             else:
                 # 调试：检查数据缺失情况
                 if fng is None:
                     print(f"{date_str}: 无贪婪恐惧指数数据")
-                if avg_price is None:
-                    print(f"{date_str}: 无价格数据")
+                if btc_price is None:
+                    print(f"{date_str}: 无BTC价格数据")
+                if eth_price is None:
+                    print(f"{date_str}: 无ETH价格数据")
             
             current_date += timedelta(days=1)
         
@@ -514,22 +932,54 @@ class InvestmentAnalyzer:
         
         # 计算最终价值（以当前价格估算）
         latest_date = datetime.now().strftime('%Y-%m-%d')
-        final_price = self.get_daily_average_price('BTC', latest_date)
-        if not final_price:
+        btc_final_price = self.get_daily_average_price('BTC', latest_date)
+        eth_final_price = self.get_daily_average_price('ETH', latest_date)
+        
+        if not btc_final_price:
             # 如果没有当天价格，尝试获取最近的价格
             if self.trade_records:
                 latest_trade = self.trade_records[-1]
-                final_price = latest_trade['price']
-                print(f"使用最近交易价格作为最终价格: ${final_price:.2f}")
+                btc_final_price = latest_trade.get('btc_trade_price', 0)
+                print(f"使用最近交易价格作为BTC最终价格: ${btc_final_price:.2f}")
         
-        if final_price:
-            btc_value = self.btc_holdings * final_price
+        if not eth_final_price:
+            # 如果没有当天价格，尝试获取最近的ETH价格
+            if self.trade_records:
+                # 找到最近的ETH交易
+                for trade in reversed(self.trade_records):
+                    if 'ETH' in trade.get('trade_note', ''):
+                        eth_final_price = trade.get('eth_trade_price', 0)
+                        print(f"使用最近交易价格作为ETH最终价格: ${eth_final_price:.2f}")
+                        break
+        
+        if btc_final_price and eth_final_price:
+            btc_value = self.btc_holdings * btc_final_price
+            eth_value = self.eth_holdings * eth_final_price
+            total_value = self.current_funds + btc_value + eth_value
+            
+            print(f"初始资金: ${self.initial_funds:.2f}")
+            print(f"最终资金: ${self.current_funds:.2f}")
+            print(f"最终持有BTC: {self.btc_holdings:.6f}")
+            print(f"最终持有ETH: {self.eth_holdings:.6f}")
+            print(f"BTC最终价格: ${btc_final_price:.2f}")
+            print(f"ETH最终价格: ${eth_final_price:.2f}")
+            print(f"BTC持仓均价: ${self.btc_average_price:.2f}")
+            print(f"ETH持仓均价: ${self.eth_average_price:.2f}")
+            print(f"BTC价值: ${btc_value:.2f}")
+            print(f"ETH价值: ${eth_value:.2f}")
+            print(f"总价值 (BTC+ETH+U): ${total_value:.2f}")
+            print(f"收益率: {(total_value / self.initial_funds - 1) * 100:.2f}%")
+        elif btc_final_price:
+            btc_value = self.btc_holdings * btc_final_price
             total_value = self.current_funds + btc_value
             
             print(f"初始资金: ${self.initial_funds:.2f}")
             print(f"最终资金: ${self.current_funds:.2f}")
             print(f"最终持有BTC: {self.btc_holdings:.6f}")
-            print(f"BTC最终价格: ${final_price:.2f}")
+            print(f"最终持有ETH: {self.eth_holdings:.6f}")
+            print(f"BTC最终价格: ${btc_final_price:.2f}")
+            print(f"BTC持仓均价: ${self.btc_average_price:.2f}")
+            print(f"ETH持仓均价: ${self.eth_average_price:.2f}")
             print(f"BTC价值: ${btc_value:.2f}")
             print(f"总价值 (BTC+U): ${total_value:.2f}")
             print(f"收益率: {(total_value / self.initial_funds - 1) * 100:.2f}%")
@@ -537,39 +987,15 @@ class InvestmentAnalyzer:
             print(f"初始资金: ${self.initial_funds:.2f}")
             print(f"最终资金: ${self.current_funds:.2f}")
             print(f"最终持有BTC: {self.btc_holdings:.6f}")
+            print(f"最终持有ETH: {self.eth_holdings:.6f}")
+            print(f"BTC持仓均价: ${self.btc_average_price:.2f}")
+            print(f"ETH持仓均价: ${self.eth_average_price:.2f}")
             print("无法计算总价值（缺少价格数据）")
         
         print(f"\n交易统计:")
         print(f"- 交易次数: {len(self.trade_records)}")
-        print(f"- 买入次数: {sum(1 for r in self.trade_records if r['type'] == 'buy')}")
-        print(f"- 卖出次数: {sum(1 for r in self.trade_records if r['type'] == 'sell')}")
-        
-        # 输出交易记录（美化格式）
-        if self.trade_records:
-            print("\n交易记录:")
-            # 使用固定宽度的格式字符串，确保精确对齐
-            format_str = "{:<12} {:<8} {:<12} {:<12} {:<12} {:<12} {:<12} {:<12}"
-            
-            # 打印表头
-            print(format_str.format('日期', '类型', '数量', '价格', '金额', '持有BTC', '剩余U', '总额U'))
-            print('=' * 95)  # 精确计算的分隔线长度
-            
-            # 打印数据行
-            for record in self.trade_records:
-                account_total = record.get('account_total', self.current_funds + (self.btc_holdings * record['price']))
-                print(format_str.format(
-                    record['date'],
-                    record['type'].upper(),
-                    f"{record['amount']:.6f}",
-                    f"${record['price']:.2f}",
-                    f"${record['total_usd']:.2f}",
-                    f"{record['btc_holdings']:.6f}",
-                    f"${record['remaining_usd']:.2f}",
-                    f"${account_total:.2f}"
-                ))
-            
-            # 打印底部分隔线
-            print('=' * 95)
+        print(f"- 买入次数: {sum(1 for r in self.trade_records if r['trade_type'] == 'buy')}")
+        print(f"- 卖出次数: {sum(1 for r in self.trade_records if r['trade_type'] == 'sell')}")
         
         print("=" * 90)
 
