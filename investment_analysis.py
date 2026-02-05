@@ -33,14 +33,14 @@ class InvestmentAnalyzer:
         # 投资策略参数（集中管理，方便调整）
         self.investment_strategy = {
             'buy_thresholds': [
-                {'fng': 15, 'btc': 300, 'eth': 200},  # 15以下买入300u BTC和200u ETH
-                {'fng': 20, 'btc': 200, 'eth': 100},  # 20以下买入200u BTC和100u ETH
-                {'fng': 25, 'btc': 100, 'eth': 50}   # 25以下买入100u BTC和50u ETH
+                {'fng': 10, 'btc': 500, 'eth': 300},
+                {'fng': 15, 'btc': 200, 'eth': 100},
+                {'fng': 20, 'btc': 100, 'eth': 50}
             ],
             'sell_thresholds': [
-                {'fng': 90, 'btc': 0.05, 'eth': 0.10},  # 90以上卖出BTC 5%和ETH 10%
-                {'fng': 85, 'btc': 0.02, 'eth': 0.05},  # 85以上卖出BTC 2%和ETH 5%
-                {'fng': 75, 'btc': 0.01, 'eth': 0.02}   # 75以上卖出BTC 1%和ETH 2%
+                {'fng': 90, 'btc': 0.03, 'eth': 0.05},
+                {'fng': 85, 'btc': 0.01, 'eth': 0.02},
+                {'fng': 80, 'btc': 0.005, 'eth': 0.01}
             ]
         }
         
@@ -328,10 +328,16 @@ class InvestmentAnalyzer:
             
             # 打印一些应该触发交易的日期
             print("\n潜在交易日期:")
+            # 从配置中获取买入和卖出的阈值
+            buy_thresholds = [t['fng'] for t in self.investment_strategy['buy_thresholds']]
+            sell_thresholds = [t['fng'] for t in self.investment_strategy['sell_thresholds']]
+            min_buy_threshold = min(buy_thresholds) if buy_thresholds else 30
+            max_sell_threshold = max(sell_thresholds) if sell_thresholds else 65
+            
             for date, fng in self.daily_fng.items():
-                if fng < 30 and date in self.daily_prices:
+                if fng < min_buy_threshold and date in self.daily_prices:
                     print(f"{date}: FNG={fng} (买入信号)")
-                elif fng > 65 and date in self.daily_prices:
+                elif fng > max_sell_threshold and date in self.daily_prices:
                     print(f"{date}: FNG={fng} (卖出信号)")
             
             return True
@@ -374,14 +380,14 @@ class InvestmentAnalyzer:
         根据贪婪恐惧指数计算投资金额
         返回(BTC投资金额, ETH投资金额)的元组
         """
-        if fng < 15:
-            return (300, 200)  # 15以下买入300u BTC和200u ETH
-        elif fng < 20:
-            return (200, 100)  # 20以下买入200u BTC和100u ETH
-        elif fng < 25:
-            return (100, 50)   # 25以下买入100u BTC和50u ETH
-        else:
-            return (0, 0)       # 25以上不买入
+        # 按贪婪恐惧指数从低到高排序
+        sorted_buy_thresholds = sorted(self.investment_strategy['buy_thresholds'], key=lambda x: x['fng'])
+        
+        for threshold in sorted_buy_thresholds:
+            if fng < threshold['fng']:
+                return (threshold['btc'], threshold['eth'])
+        
+        return (0, 0)  # 所有阈值以上不买入
     
     def buy_btc(self, date, price, fng):
         """
@@ -586,8 +592,12 @@ class InvestmentAnalyzer:
         # 保存到数据库
         self.save_trade_to_database(trade_record)
         
-        print(f"{date}: 买入 {btc_amount:.6f} BTC, 价格: ${btc_price:.2f}, 花费: ${btc_investment:.2f}")
-        print(f"{date}: 买入 {eth_amount:.6f} ETH, 价格: ${eth_price:.2f}, 花费: ${eth_investment:.2f}")
+        buy_details = []
+        if btc_amount > 0:
+            buy_details.append(f"买入 {btc_amount:.6f} BTC, 花费: ${btc_investment:.2f}")
+        if eth_amount > 0:
+            buy_details.append(f"买入 {eth_amount:.6f} ETH, 花费: ${eth_investment:.2f}")
+        print(f"{date}: {'; '.join(buy_details)}")
         print(f"  当前持有: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f}, 剩余资金: ${self.current_funds:.2f}")
         print(f"  账户总额: ${account_total:.2f}")
         
@@ -603,14 +613,17 @@ class InvestmentAnalyzer:
             return False
         
         # 根据贪婪恐惧指数确定卖出比例
-        if fng >= 90:
-            sell_percentage = 0.05  # 90以上卖出5%
-        elif fng >= 85:
-            sell_percentage = 0.02  # 85以上卖出2%
-        elif fng >= 75:
-            sell_percentage = 0.01  # 75以上卖出1%
-        else:
-            return False  # 75以下不卖出
+        # 按贪婪恐惧指数从高到低排序
+        sorted_sell_thresholds = sorted(self.investment_strategy['sell_thresholds'], key=lambda x: x['fng'], reverse=True)
+        
+        sell_percentage = None
+        for threshold in sorted_sell_thresholds:
+            if fng >= threshold['fng']:
+                sell_percentage = threshold['btc']
+                break
+        
+        if sell_percentage is None:
+            return False  # 所有阈值以下不卖出
         
         # 计算卖出数量
         sell_amount = self.btc_holdings * sell_percentage
@@ -673,14 +686,17 @@ class InvestmentAnalyzer:
             return False
         
         # 根据贪婪恐惧指数确定卖出比例
-        if fng >= 90:
-            sell_percentage = 0.10  # 90以上卖出10%
-        elif fng >= 85:
-            sell_percentage = 0.05  # 85以上卖出5%
-        elif fng >= 75:
-            sell_percentage = 0.02  # 75以上卖出2%
-        else:
-            return False  # 75以下不卖出
+        # 按贪婪恐惧指数从高到低排序
+        sorted_sell_thresholds = sorted(self.investment_strategy['sell_thresholds'], key=lambda x: x['fng'], reverse=True)
+        
+        sell_percentage = None
+        for threshold in sorted_sell_thresholds:
+            if fng >= threshold['fng']:
+                sell_percentage = threshold['eth']
+                break
+        
+        if sell_percentage is None:
+            return False  # 所有阈值以下不卖出
         
         # 计算卖出数量
         sell_amount = self.eth_holdings * sell_percentage
@@ -743,17 +759,20 @@ class InvestmentAnalyzer:
             return False
         
         # 根据贪婪恐惧指数确定卖出比例
-        if fng >= 90:
-            btc_sell_percentage = 0.05  # 90以上卖出BTC 5%
-            eth_sell_percentage = 0.10  # 90以上卖出ETH 10%
-        elif fng >= 85:
-            btc_sell_percentage = 0.02  # 85以上卖出BTC 2%
-            eth_sell_percentage = 0.05  # 85以上卖出ETH 5%
-        elif fng >= 75:
-            btc_sell_percentage = 0.01  # 75以上卖出BTC 1%
-            eth_sell_percentage = 0.02  # 75以上卖出ETH 2%
-        else:
-            return False  # 75以下不卖出
+        # 按贪婪恐惧指数从高到低排序
+        sorted_sell_thresholds = sorted(self.investment_strategy['sell_thresholds'], key=lambda x: x['fng'], reverse=True)
+        
+        btc_sell_percentage = None
+        eth_sell_percentage = None
+        
+        for threshold in sorted_sell_thresholds:
+            if fng >= threshold['fng']:
+                btc_sell_percentage = threshold['btc']
+                eth_sell_percentage = threshold['eth']
+                break
+        
+        if btc_sell_percentage is None or eth_sell_percentage is None:
+            return False  # 所有阈值以下不卖出
         
         # 计算BTC卖出数量和价值
         if self.btc_holdings > 0:
@@ -813,11 +832,13 @@ class InvestmentAnalyzer:
         self.save_trade_to_database(trade_record)
         
         # 打印交易信息
-        if btc_sell_amount > 0:
-            print(f"{date}: 卖出 {btc_sell_amount:.6f} BTC, 价格: ${btc_price:.2f}, 获得: ${btc_sell_value:.2f}")
-        if eth_sell_amount > 0:
-            print(f"{date}: 卖出 {eth_sell_amount:.6f} ETH, 价格: ${eth_price:.2f}, 获得: ${eth_sell_value:.2f}")
         if btc_sell_amount > 0 or eth_sell_amount > 0:
+            sell_details = []
+            if btc_sell_amount > 0:
+                sell_details.append(f"卖出 {btc_sell_amount:.6f} BTC, 获得: ${btc_sell_value:.2f}")
+            if eth_sell_amount > 0:
+                sell_details.append(f"卖出 {eth_sell_amount:.6f} ETH, 获得: ${eth_sell_value:.2f}")
+            print(f"{date}: {'; '.join(sell_details)}")
             print(f"  当前持有: BTC={self.btc_holdings:.6f}, ETH={self.eth_holdings:.6f}, 剩余资金: ${self.current_funds:.2f}")
             print(f"  账户总额: ${account_total:.2f}")
         
@@ -893,19 +914,25 @@ class InvestmentAnalyzer:
             
             # 检查是否需要操作
             if fng is not None and btc_price is not None and eth_price is not None:
-                if fng < 25:
-                    # 贪婪恐惧指数25以下，买入
+                # 从配置中获取最大的买入阈值和最小的卖出阈值
+                buy_thresholds = [t['fng'] for t in self.investment_strategy['buy_thresholds']]
+                sell_thresholds = [t['fng'] for t in self.investment_strategy['sell_thresholds']]
+                max_buy_threshold = max(buy_thresholds) if buy_thresholds else 20
+                min_sell_threshold = min(sell_thresholds) if sell_thresholds else 80
+                
+                if fng < max_buy_threshold:
+                    # 贪婪恐惧指数低于最大买入阈值，买入
                     if self.last_buy_date != date_str:
                         print(f"\n{date_str}: 贪婪恐惧指数={fng}, BTC均价=${btc_price:.2f}, ETH均价=${eth_price:.2f}")
                         # 合并买入BTC和ETH
                         self.buy_crypto(date_str, btc_price, eth_price, fng)
-                elif fng >= 75:
-                    # 贪婪恐惧指数75以上，根据不同区间卖出不同比例
+                elif fng >= min_sell_threshold:
+                    # 贪婪恐惧指数高于最小卖出阈值，根据不同区间卖出不同比例
                     if self.last_sell_date != date_str:
                         print(f"\n{date_str}: 贪婪恐惧指数={fng}, BTC均价=${btc_price:.2f}, ETH均价=${eth_price:.2f}")
                         # 合并卖出BTC和ETH
                         self.sell_crypto(date_str, btc_price, eth_price, fng)
-                # 25-75区间，不操作，不输出
+                # 其他区间，不操作，不输出
             else:
                 # 调试：检查数据缺失情况
                 if fng is None:
@@ -999,15 +1026,11 @@ class InvestmentAnalyzer:
         
         print("=" * 90)
 
-def main():
-    """
-    主函数
-    """
-    analyzer = InvestmentAnalyzer()
-    
-    # 分析投资策略
-    print("分析投资策略...")
-    analyzer.analyze_investment()
 
 if __name__ == '__main__':
-    main()
+    """
+    主函数，执行投资策略分析
+    """
+    print("启动加密货币投资策略分析...")
+    analyzer = InvestmentAnalyzer()
+    analyzer.analyze_investment()
