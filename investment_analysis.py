@@ -16,22 +16,17 @@ class InvestmentAnalyzer:
     加密货币投资策略分析器
     基于贪婪恐惧指数进行投资决策
     """
-    def __init__(self):
+    def __init__(self, initial_funds=None, investment_strategy=None):
         """
         初始化投资分析器
-        """
-        self.initial_funds = 10000  # 初始资金
-        self.current_funds = 10000  # 当前资金
-        self.btc_holdings = 0  # 持有BTC数量
-        self.eth_holdings = 0  # 持有ETH数量
-        self.btc_average_price = 0  # BTC持有均价
-        self.eth_average_price = 0  # ETH持有均价
-        self.trade_records = []  # 交易记录
-        self.last_buy_date = None  # 上次买入日期
-        self.last_sell_date = None  # 上次卖出日期
         
-        # 投资策略参数（集中管理，方便调整）
-        self.investment_strategy = {
+        Args:
+            initial_funds: 初始资金
+            investment_strategy: 投资策略配置
+        """
+        # 默认值
+        default_initial_funds = 50000
+        default_strategy = {
             'buy_thresholds': [
                 {'fng': 10, 'btc': 500, 'eth': 300},
                 {'fng': 15, 'btc': 200, 'eth': 100},
@@ -43,6 +38,19 @@ class InvestmentAnalyzer:
                 {'fng': 80, 'btc': 0.005, 'eth': 0.01}
             ]
         }
+        
+        # 使用传入的配置或默认值
+        self.initial_funds = initial_funds if initial_funds is not None else default_initial_funds
+        self.current_funds = self.initial_funds  # 当前资金
+        self.btc_holdings = 0  # 持有BTC数量
+        self.eth_holdings = 0  # 持有ETH数量
+        self.btc_average_price = 0  # BTC持有均价
+        self.eth_average_price = 0  # ETH持有均价
+        self.trade_records = []  # 交易记录
+        self.last_buy_date = None  # 上次买入日期
+        self.last_sell_date = None  # 上次卖出日期
+        
+        self.investment_strategy = investment_strategy if investment_strategy is not None else default_strategy
         
         self.create_trade_table()  # 创建交易记录表
     
@@ -323,8 +331,8 @@ class InvestmentAnalyzer:
             sample_dates = list(self.daily_prices.keys())[:5]
             for date in sample_dates:
                 fng = self.daily_fng.get(date, 'N/A')
-                price = self.daily_prices.get(date, 'N/A')
-                print(f"{date}: FNG={fng}, Price={price}")
+                # price = self.daily_prices.get(date, 'N/A')
+                # print(f"{date}: FNG={fng}, Price={price}")
             
             # 打印一些应该触发交易的日期
             print("\n潜在交易日期:")
@@ -845,9 +853,13 @@ class InvestmentAnalyzer:
         self.last_sell_date = date
         return True
     
-    def analyze_investment(self):
+    def analyze_investment(self, start_date=None, end_date=None):
         """
         分析投资策略
+        
+        参数:
+            start_date (datetime, optional): 投资开始时间
+            end_date (datetime, optional): 投资结束时间
         """
         print("\n" + "=" * 90)
         print("        加密货币投资策略分析")
@@ -870,11 +882,14 @@ class InvestmentAnalyzer:
         sell_strategy = "，".join(sell_strategy_lines)
         print(f"卖出策略: 贪婪恐惧指数{sell_strategy}")
         
-        # 强制从2020年开始分析，以获取完整的历史数据
-        start_date = datetime(2020, 1, 1)
-        print(f"从初始日期开始: {start_date.strftime('%Y年%m月%d日')}")
+        # 设置默认时间范围
+        if not start_date:
+            start_date = datetime(2020, 1, 1)
+        if not end_date:
+            end_date = datetime.now()
         
-        end_date = datetime.now()
+        print(f"投资开始时间: {start_date.strftime('%Y年%m月%d日')}")
+        print(f"投资结束时间: {end_date.strftime('%Y年%m月%d日')}")
         print(f"时间范围: {start_date.strftime('%Y年%m月%d日')} - {end_date.strftime('%Y年%m月%d日')}")
         print("=" * 90)
         
@@ -945,20 +960,23 @@ class InvestmentAnalyzer:
             current_date += timedelta(days=1)
         
         # 分析结束，输出结果
-        self.print_summary()
+        self.print_summary(end_date)
     
 
     
-    def print_summary(self):
+    def print_summary(self, end_date):
         """
         输出投资总结
+        
+        Args:
+            end_date: 分析结束日期
         """
         print("\n" + "=" * 90)
         print("        投资策略分析总结")
         print("=" * 90)
         
-        # 计算最终价值（以当前价格估算）
-        latest_date = datetime.now().strftime('%Y-%m-%d')
+        # 计算最终价值（以分析结束日期的价格估算）
+        latest_date = end_date.strftime('%Y-%m-%d')
         btc_final_price = self.get_daily_average_price('BTC', latest_date)
         eth_final_price = self.get_daily_average_price('ETH', latest_date)
         
@@ -1027,10 +1045,51 @@ class InvestmentAnalyzer:
         print("=" * 90)
 
 
+# ==================== 配置区域 ====================
+# 在此处修改配置参数
+
+# 初始资金配置
+INITIAL_FUNDS = 10000  # 初始投资资金
+
+# 投资策略配置（基于贪婪恐惧指数）
+INVESTMENT_STRATEGY = {
+    'buy_thresholds': [
+        {'fng': 10, 'btc': 500, 'eth': 300},  # 极度恐惧时的买入金额
+        {'fng': 15, 'btc': 200, 'eth': 100},  # 非常恐惧时的买入金额
+        {'fng': 20, 'btc': 100, 'eth': 50}    # 恐惧时的买入金额
+    ],
+    'sell_thresholds': [
+        {'fng': 90, 'btc': 0.03, 'eth': 0.05},  # 极度贪婪时的卖出比例
+        {'fng': 85, 'btc': 0.01, 'eth': 0.02},  # 非常贪婪时的卖出比例
+        {'fng': 80, 'btc': 0.005, 'eth': 0.01}  # 贪婪时的卖出比例
+    ]
+}
+# =================================================
+
+
 if __name__ == '__main__':
     """
     主函数，执行投资策略分析
+    可以直接在此处修改投资的开始时间和结束时间
     """
     print("启动加密货币投资策略分析...")
-    analyzer = InvestmentAnalyzer()
-    analyzer.analyze_investment()
+    # 使用配置区域的参数创建分析器实例
+    analyzer = InvestmentAnalyzer(
+        initial_funds=INITIAL_FUNDS,
+        investment_strategy=INVESTMENT_STRATEGY
+    )
+    
+    # 直接在代码中设置投资时间范围
+    # 格式: datetime(年, 月, 日)
+    start_date = datetime(2020, 1, 1)  # 投资开始时间
+    end_date = datetime(2020, 12, 31)      # 投资结束时间
+    
+    # 验证时间范围
+    if start_date >= end_date:
+        print("错误: 开始时间必须早于结束时间")
+        start_date = datetime(2020, 1, 1)
+        end_date = datetime.now()
+        print(f"使用默认时间范围: {start_date.strftime('%Y-%m-%d')} 到 {end_date.strftime('%Y-%m-%d')}")
+    
+    # 执行分析
+    analyzer.analyze_investment(start_date, end_date)
