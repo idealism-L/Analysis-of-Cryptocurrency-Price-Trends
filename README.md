@@ -1,203 +1,197 @@
-# 加密货币价格趋势分析系统
+# 加密货币价格趋势分析工具
 
-## 项目简介
-
-本项目是一个加密货币价格趋势分析系统，主要功能包括：
-- 从Binance API获取BTC和ETH的价格数据
-- 从Alternative.me API获取比特币贪婪恐惧指数数据
-- 将数据存储到MySQL数据库中
-- 基于贪婪恐惧指数的投资策略分析
-- 每日数据完整性检查和修复
-- 价格计算使用开盘价和收盘价的均价
+一个用于获取、存储和分析加密货币价格数据的Python工具，支持BTC和ETH的历史数据获取、贪婪恐惧指数追踪以及基于情绪指标的投资策略分析。
 
 ## 功能特性
 
-- **数据获取**：从Binance API获取5分钟间隔的K线数据，从Alternative.me API获取每日贪婪恐惧指数
-- **错误重试**：API请求失败时自动重试，提高数据获取成功率
-- **数据存储**：将数据存储到MySQL数据库，支持增量更新
-- **投资分析**：基于贪婪恐惧指数的投资策略分析，生成交易记录
-- **数据完整性**：检查每日数据完整性（288条/天），自动修复缺失数据
-- **价格计算**：使用开盘价和收盘价的均价作为价格
-- **项目结构**：清晰的模块化设计，易于维护和扩展
+- 数据获取：从Binance API获取BTC和ETH的5分钟K线数据
+- 情绪追踪：从Alternative.me获取贪婪恐惧指数数据
+- 数据存储：使用MySQL数据库存储所有历史数据
+- 投资分析：基于贪婪恐惧指数的自动交易策略回测
+- 日志系统：支持多级别日志输出，便于调试和监控
+- 配置管理：通过环境变量管理所有配置项
 
 ## 项目结构
 
 ```
 Analysis of Cryptocurrency Price Trends/
-├── main.py              # 核心功能模块，数据获取和数据库操作
-├── investment_analysis.py  # 投资策略分析模块
-├── daily_data_checker.py    # 每日数据完整性检查模块
-├── README.md            # 项目说明文档
-└── requirements.txt     # 项目依赖
+├── config.py              # 统一配置模块
+├── main.py                # 主程序：数据获取和数据库初始化
+├── daily_data_checker.py   # 数据完整性检查工具
+├── investment_analysis.py   # 投资策略分析工具
+├── requirements.txt        # Python依赖包
+├── .env                  # 环境变量配置（本地）
+├── .env.example          # 环境变量配置模板
+└── .gitignore           # Git忽略文件
 ```
 
-## 安装和依赖
+## 安装依赖
 
-### 依赖项
+```bash
+pip install -r requirements.txt
+```
 
-- Python 3.7+
-- MySQL 5.7+
-- 所需Python库：
-  - requests
-  - schedule
-  - pymysql
+## 配置说明
 
-### 安装方法
+复制`.env.example`为`.env`并修改配置：
 
-1. 克隆项目到本地
-2. 安装所需依赖：
-   ```bash
-   pip install requests schedule pymysql
-   ```
-3. 确保MySQL服务已启动
-4. 修改数据库配置（在各文件中）：
-   ```python
-   DB_CONFIG = {
-       'host': 'localhost',
-       'user': 'root',
-       'password': '123456',
-       'charset': 'utf8mb4'
-   }
-   ```
+```env
+# 数据库配置
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=your_password_here
+DB_CHARSET=utf8mb4
+DB_NAME=cryptocurrency_analysis
+
+# 初始资金
+INITIAL_FUNDS=10000
+
+# 买入策略（贪婪恐惧指数低于阈值时买入）
+BUY_THRESHOLDS=[{"fng": 10, "btc": 500, "eth": 300}, {"fng": 15, "btc": 200, "eth": 100}, {"fng": 20, "btc": 100, "eth": 50}]
+
+# 卖出策略（贪婪恐惧指数高于阈值时卖出）
+SELL_THRESHOLDS=[{"fng": 90, "btc": 0.03, "eth": 0.05}, {"fng": 85, "btc": 0.01, "eth": 0.02}, {"fng": 80, "btc": 0.005, "eth": 0.01}]
+
+# 日志级别（DEBUG/INFO/WARNING/ERROR）
+LOG_LEVEL=INFO
+```
 
 ## 使用方法
 
-### 1. 初始化数据库和获取数据
+### 1. 获取历史数据
 
-运行主脚本，初始化数据库并获取2020年至今的完整数据：
+运行主程序获取2020年至今的完整数据：
 
 ```bash
 python main.py
 ```
 
-### 2. 运行投资策略分析
+程序将自动：
+- 初始化数据库和表结构
+- 获取贪婪恐惧指数历史数据
+- 获取BTC和ETH的价格数据
+- 保存所有数据到MySQL数据库
 
-分析基于贪婪恐惧指数的投资策略：
+### 2. 检查数据完整性
 
-```bash
-python investment_analysis.py
-```
-
-### 3. 检查数据完整性
-
-检查并修复每日数据完整性：
+检查并修复缺失的数据：
 
 ```bash
 python daily_data_checker.py
 ```
 
-## 数据库结构
+### 3. 投资策略分析
 
-### 1. currencies表
+基于贪婪恐惧指数进行投资策略回测：
 
-| 字段名 | 数据类型 | 描述 |
-|-------|---------|------|
-| id | INT | 自增主键 |
-| symbol | VARCHAR(10) | 加密货币符号（如BTC、ETH） |
-| name | VARCHAR(50) | 加密货币名称（如Bitcoin、Ethereum） |
-| is_active | BOOLEAN | 是否活跃 |
-| created_at | TIMESTAMP | 创建时间 |
-| updated_at | TIMESTAMP | 更新时间 |
-
-### 2. price_data表
-
-| 字段名 | 数据类型 | 描述 |
-|-------|---------|------|
-| id | INT | 自增主键 |
-| currency_id | INT | 关联currencies表的外键 |
-| symbol | VARCHAR(10) | 加密货币符号（冗余字段） |
-| price | DECIMAL(20, 2) | 价格（开盘价和收盘价的均价） |
-| timestamp | DATETIME | 时间戳 |
-| created_at | TIMESTAMP | 创建时间 |
-
-### 3. fear_greed_index表
-
-| 字段名 | 数据类型 | 描述 |
-|-------|---------|------|
-| date | DATE | 日期（主键） |
-| value | INT | 贪婪恐惧指数值（0-100） |
-
-### 4. trade_records表
-
-| 字段名 | 数据类型 | 描述 |
-|-------|---------|------|
-| id | INT | 自增主键 |
-| date | DATE | 交易日期 |
-| type | VARCHAR(10) | 交易类型（buy/sell） |
-| amount | DECIMAL(20, 8) | 交易数量 |
-| price | DECIMAL(20, 2) | 交易价格 |
-| total_usd | DECIMAL(20, 2) | 交易总金额 |
-| btc_holdings | DECIMAL(20, 8) | 持有BTC数量 |
-| remaining_usd | DECIMAL(20, 2) | 剩余资金 |
-| account_total | DECIMAL(20, 2) | 账户总价值 |
-| created_at | TIMESTAMP | 创建时间 |
+```bash
+python investment_analysis.py
+```
 
 ## 投资策略说明
 
 ### 买入策略
 
-基于贪婪恐惧指数的买入策略：
-- 贪婪恐惧指数 < 20：买入300美元
-- 贪婪恐惧指数 < 25：买入200美元
-- 贪婪恐惧指数 < 30：买入100美元
+当贪婪恐惧指数低于以下阈值时，分别买入BTC和ETH：
+
+| 指数 | BTC投资额 | ETH投资额 |
+|------|-----------|-----------|
+| < 10 | $500 | $300 |
+| < 15 | $200 | $100 |
+| < 20 | $100 | $50 |
 
 ### 卖出策略
 
-基于贪婪恐惧指数的卖出策略：
-- 贪婪恐惧指数 >= 80：卖出5%的持仓
-- 贪婪恐惧指数 >= 75：卖出3%的持仓
-- 贪婪恐惧指数 >= 70：卖出2%的持仓
+当贪婪恐惧指数高于以下阈值时，卖出对应比例的持仓：
 
-### 初始资金
+| 指数 | BTC卖出比例 | ETH卖出比例 |
+|------|------------|------------|
+| > 90 | 3% | 5% |
+| > 85 | 1% | 2% |
+| > 80 | 0.5% | 1% |
 
-- 初始资金：10,000美元
-- 只投资BTC
+## 数据库表结构
 
-## 数据完整性检查
+### currencies
+- id: 币种ID
+- symbol: 币种符号（BTC/ETH）
+- name: 币种名称
+- is_active: 是否活跃
+- created_at/updated_at: 创建/更新时间
 
-### 检查逻辑
+### price_data
+- id: 记录ID
+- currency_id: 币种ID
+- symbol: 币种符号
+- price: 价格
+- timestamp: 时间戳
+- created_at: 创建时间
 
-- 每天应包含288条数据（5分钟间隔）
-- 检查从2020年至今的所有数据
-- 日期范围不超过当前日期
+### fear_greed_index
+- date: 日期
+- value: 贪婪恐惧指数值（0-100）
 
-### 修复方法
+### trade_records
+- id: 交易记录ID
+- trade_date: 交易日期
+- trade_type: 交易类型（buy/sell）
+- btc_trade_amount/value/price: BTC交易信息
+- eth_trade_amount/value/price: ETH交易信息
+- total_trade_value: 交易总金额
+- btc_holdings/eth_holdings: 持仓数量
+- btc_average_price/eth_average_price: 持仓均价
+- remaining_usd: 剩余资金
+- account_total: 账户总价值
+- trade_note: 交易备注
+- created_at: 创建时间
 
-- 当发现数据不足时，从Binance API重新获取数据
-- 使用开盘价和收盘价的均价作为价格
-- 数据直接存储到price_data表中
+## API说明
 
-## 价格计算方法
+### Binance API
+- 获取实时价格：`/api/v3/ticker/price`
+- 获取K线数据：`/api/v3/klines`
+- 请求限制：每IP 1200次/分钟
 
-本项目使用开盘价和收盘价的均价作为价格：
+### Alternative.me API
+- 获取贪婪恐惧指数：`/fng/`
+- 数据范围：最多返回3000条历史数据
 
-```python
-open_price = float(kline[1])  # 开盘价
-close_price = float(kline[4])  # 收盘价
-avg_price = (open_price + close_price) / 2  # 均价
-```
+## 日志级别
+
+- **DEBUG**: 详细的调试信息，包括所有请求和响应
+- **INFO**: 一般信息，包括程序启动、完成、数据统计
+- **WARNING**: 警告信息，包括资源不足、数据缺失
+- **ERROR**: 错误信息，包括连接失败、请求失败
+
+通过修改`.env`文件中的`LOG_LEVEL`来控制日志输出详细程度。
+
+## 技术栈
+
+- Python 3.x
+- MySQL
+- Binance API
+- Alternative.me API
+- python-dotenv（环境变量管理）
+- requests（HTTP请求）
+- schedule（定时任务）
+- pymysql（MySQL连接）
 
 ## 注意事项
 
-1. **API限制**：Binance API有请求频率限制，项目已添加延迟机制避免触发限制
-2. **数据存储**：首次运行时会创建数据库和表结构，确保MySQL服务已启动
-3. **投资风险**：本项目的投资策略仅供参考，不构成投资建议
-4. **数据完整性**：数据检查可能需要较长时间，特别是首次运行时
-5. **网络连接**：确保网络连接稳定，避免数据获取中断
+1. 首次运行前确保MySQL服务已启动
+2. 修改`.env`文件中的数据库密码
+3. API请求有速率限制，程序已内置重试机制
+4. 数据获取可能需要较长时间，请耐心等待
+5. 定期运行`daily_data_checker.py`检查数据完整性
 
-## 扩展建议
+## 许可证
 
-1. **支持更多币种**：修改代码以支持更多加密货币
-2. **增加技术指标**：添加更多技术指标到投资分析中
-3. **可视化界面**：添加数据可视化界面，更直观地展示分析结果
-4. **自动化交易**：集成交易API，实现自动化交易
-5. **性能优化**：优化数据获取和存储性能，支持更大规模的数据
+MIT License
 
-## 联系方式
+## 作者
 
-如有问题或建议，欢迎联系项目维护者。
+idealism-L
 
----
+## 项目链接
 
-*项目版本：1.0.0*
-*最后更新：2026-02-01*
+GitHub: https://github.com/idealism-L
